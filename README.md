@@ -4,7 +4,7 @@
   
   [![Python version](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-  [![Tests](https://github.com/asgersvenning/mini-timelapse/actions/workflows/test.yml/badge.svg)](https://github.com/asgersvenning/mini-timelapse/actions)
+  [![Tests](https://github.com/asgersvenning/mini_timelapse/actions/workflows/test.yml/badge.svg)](https://github.com/asgersvenning/mini_timelapse/actions)
 </div>
 
 ---
