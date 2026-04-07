@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Hidden files
+.*/**
+!.gitignore
+!.github/**
+
+# Data 
+**.log
+**.mkv
+**.MKV
+**.mp4
+**.MP4
+**.jpg
+**.jpeg
+**.JPG
+**.JPEG
+**.png
+**.PNG
+
