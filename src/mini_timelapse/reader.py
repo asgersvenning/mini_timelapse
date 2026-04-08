@@ -1,185 +1,203 @@
 import av
-import json
 import os
-from typing import Any, Generator
+import json
+import logging
+import subprocess
+import tempfile
+from datetime import datetime
+from typing import List, Optional, Union
+import numpy as np
+from mini_timelapse.metadata import decode_metadata_payload
+
+logger = logging.getLogger(__name__)
 
 class TimelapseVideo:
     """
-    A unified wrapper for a 1:1 timelapse video with embedded JSON metadata.
-    Provides sequence-like frame access and per-frame metadata extraction.
+    A high-level interface for reading and decompiling timelapse videos
+    with frame-accurate metadata recovery.
     """
-    def __init__(self, path: str):
-        """
-        Initialize the TimelapseVideo by opening the video container
-        and extracting metadata.
-        
-        Args:
-            path (str): File path to the video (e.g., .mkv or .mp4).
-        """
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Video file not found: {path}")
-            
+    def __init__(self, path: str, fps: float = 30.0):
         self.path = path
+        self._fps = fps
         self._container = av.open(path)
-        
-        # Verify streams
-        if not self._container.streams.video:
-            raise ValueError(f"Video file {path} has no video stream.")
-        
-        self._video_stream = self._container.streams.video[0]
+        self._video_stream = next((s for s in self._container.streams if s.type == "video"), None)
+        if not self._video_stream:
+            raise ValueError(f"No video stream found in {path}")
+            
+        self.width = self._video_stream.width
+        self.height = self._video_stream.height
         self.length = self._video_stream.frames
-        
-        # If frame count is 0 (sometimes happens with certain containers/codecs), 
-        # we might need to count manually, but for mkv/h264 it's usually reliable.
         if self.length == 0:
-            # Fallback: decode once to count (slow but reliable)
-            self.length = sum(1 for _ in self._container.decode(video=0))
-            self._container.seek(0)
-            
+            # Fallback for some containers: use duration from stream or container
+            if self._video_stream.duration is not None:
+                self.length = int(round(float(self._video_stream.duration * self._video_stream.time_base) * fps))
+            elif self._container.duration is not None:
+                # container.duration is in av.time_base (microseconds)
+                self.length = int(round(float(self._container.duration / av.time_base) * fps))
+            else:
+                self.length = 0 
+
+        # Extract metadata
         self.metadata = self._extract_metadata()
-        
-        if len(self.metadata) > 0 and len(self.metadata) != self.length:
-            print(f"Warning: Frame count ({self.length}) does not match metadata count ({len(self.metadata)})")
-            self.length = min(self.length, len(self.metadata))
-
-    def _extract_metadata(self) -> list[dict[str, Any]]:
-        """
-        Extract JSON metadata interleaved in the video's subtitle stream or global metadata.
-        
-        Returns:
-            list[dict[str, Any]]: A list of metadata dictionaries, one per frame.
-        """
-        # 1. Try legacy video stream tag
-        json_data = self._video_stream.metadata.get("JSON_METADATA")
-        if json_data:
-            try:
-                return json.loads(json_data)
-            except json.JSONDecodeError:
-                pass
-
-        # 2. Try interleaved subtitle stream
-        metadata = []
-        sub_stream = None
-        for s in self._container.streams.subtitles:
-            if s.metadata.get("TITLE") == "JSON_METADATA" or len(self._container.streams.subtitles) == 1:
-                sub_stream = s
-                break
-        
-        if sub_stream:
-            # We must demux/decode to get the packets. 
-            # Subtitle packets are usually very small, so this is fast.
-            # We seek to the beginning first.
-            self._container.seek(0)
-            # Use demux to get packets specifically for the subtitle stream
-            for packet in self._container.demux(sub_stream):
-                if packet.pts is None:
-                    continue
-                try:
-                    # Packet data for 'ass' is a bytes string
-                    data = bytes(packet).decode("utf-8")
-                    # Remove potential SRT formatting if any (though we wrote raw JSON)
-                    if "-->" in data:
-                        # Simple SRT parser fallback if needed, 
-                        # but our compile.py writes raw JSON.
-                        pass
-                    
-                    # Try to parse the whole packet as JSON
-                    meta_item = json.loads(data)
-                    metadata.append(meta_item)
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-            
-            # Reset container for subsequent video decoding
-            self._container.seek(0)
-
-        return metadata
-
-    def get_frame(self, idx: int):
-        """
-        Retrieve a specific frame by its index.
-        
-        Args:
-            idx (int): The 0-based frame index to retrieve.
-            
-        Returns:
-            tuple: A tuple containing (rgb_ndarray, metadata_dict).
-            
-        Raises:
-            IndexError: If the index is out of bounds.
-            RuntimeError: If the frame could not be located.
-        """
-        if idx < 0 or idx >= self.length:
-            raise IndexError(f"Frame index {idx} out of bounds (0 - {self.length-1})")
-            
-        # For random access, seek to the target index.
-        # Video streams in MKV are usually indexed.
-        # Seek to the target timestamp.
-        time_base = self._video_stream.time_base
-        # In a 1:1 timelapse, usually timestamp = idx / fps
-        # Or better: use the average frame rate
-        fps = self._video_stream.average_rate
-        target_pts = int(idx * (time_base.denominator / (time_base.numerator * fps)))
-        
-        # Seek to the nearest keyframe at or before target_pts
-        self._container.seek(target_pts, stream=self._video_stream)
-        
-        # Decode until we reach the exact frame index
-        last_frame = None
-        for frame in self._container.decode(video=0):
-            # We calculate current index from PTS
-            current_idx = int(round(frame.pts * time_base.numerator * fps / time_base.denominator))
-            if current_idx == idx:
-                last_frame = frame
-                break
-            elif current_idx > idx:
-                # We missed it or it doesn't exist? (Shouldn't happen on 1:1)
-                break
-        
-        if last_frame is None:
-            raise RuntimeError(f"Could not find frame at index {idx}")
-            
-        frame_ndarray = last_frame.to_ndarray(format="rgb24")
-        meta = self.metadata[idx] if idx < len(self.metadata) else {}
-        return frame_ndarray, meta
-
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            start, stop, step = key.indices(self.length)
-            # This is slow for large slices, but works.
-            return [self.get_frame(i) for i in range(start, stop, step)]
-        elif isinstance(key, int):
-            if key < 0:
-                key += self.length
-            return self.get_frame(key)
-        else:
-            raise TypeError(f"Invalid argument type: {type(key)}")
 
     def __len__(self):
         return self.length
 
-    def __iter__(self) -> Generator[tuple[Any, dict[str, Any]], None, None]:
+    def _extract_metadata(self) -> List[dict]:
         """
-        Iterate through all frames in the video sequentially.
+        Extracts metadata using the most reliable source available:
+        1. Sovereign Backbone: Matroska JSON attachment (added via post-process)
+        2. Visible Stream: FFmpeg SRT parsing (fallback)
+        3. Raw Decoder: PyAV demuxing (safety fallback)
+        """
+        metadata_dict = {}
+        unique_indices = set()
         
-        Yields:
-            tuple: A tuple containing (rgb_ndarray, metadata_dict).
-        """
+        # 1. SOVEREIGN PATH: Matroska Attachment (Atomic & 100% Reliable)
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_json = os.path.join(tmp_dir, "extracted_meta.json")
+                cmd = [
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                    "-dump_attachment:t:0", tmp_json,
+                    "-i", self.path,
+                    "-f", "null", "-"
+                ]
+                # Run with timeout to prevent hangs
+                subprocess.run(cmd, timeout=10, check=True, capture_output=True)
+                
+                if os.path.exists(tmp_json):
+                    with open(tmp_json, "r") as f:
+                        attachment_data = json.load(f)
+                    
+                    if isinstance(attachment_data, list):
+                        logger.info(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
+                        for item in attachment_data:
+                            if "index" in item:
+                                metadata_dict[int(item["index"])] = item
+                                unique_indices.add(int(item["index"]))
+        except Exception as e:
+            logger.debug(f"Attachment extraction skipped or failed: {e}")
+
+        # 2. LEGACY PATH: FFmpeg CLI SRT Parsing
+        if len(unique_indices) < self.length:
+            sub_stream = next((s for s in self._container.streams if s.type == "subtitle"), None)
+            if sub_stream:
+                try:
+                    cmd = [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error",
+                        "-i", self.path,
+                        "-map", f"0:{sub_stream.index}",
+                        "-f", "srt", "-"
+                    ]
+                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout, _ = process.communicate()
+                    
+                    if process.returncode == 0:
+                        srt_text = stdout.decode("utf-8", errors="ignore")
+                        meta_items = decode_metadata_payload(srt_text)
+                        for item in meta_items:
+                            if "index" in item:
+                                idx = int(item["index"])
+                                if idx not in metadata_dict:
+                                    metadata_dict[idx] = item
+                                    unique_indices.add(idx)
+                except Exception as e:
+                    logger.debug(f"FFmpeg CLI extraction fallback failed: {e}")
+
+        # 3. SAFETY FALLBACK: PyAV Demux
+        if len(unique_indices) < self.length:
+            sub_stream = next((s for s in self._container.streams if s.type == "subtitle"), None)
+            if sub_stream:
+                self._container.seek(0)
+                for packet in self._container.demux(sub_stream):
+                    try:
+                        for subtitle in packet.decode():
+                            for rect in getattr(subtitle, "rects", []):
+                                text_data = getattr(rect, "ass", "") or getattr(rect, "text", "")
+                                if text_data:
+                                    for item in decode_metadata_payload(text_data):
+                                        idx = int(item.get("index", -1))
+                                        if idx != -1 and idx not in metadata_dict:
+                                            metadata_dict[idx] = item
+                                            unique_indices.add(idx)
+                    except: pass
+                    for item in decode_metadata_payload(bytes(packet)):
+                        idx = int(item.get("index", -1))
+                        if idx != -1 and idx not in metadata_dict:
+                            metadata_dict[idx] = item
+                            unique_indices.add(idx)
+
+        # Map to dense list
+        metadata = [{} for _ in range(self.length)]
+        for idx, item in metadata_dict.items():
+            if 0 <= idx < self.length:
+                metadata[idx] = item
+                
+        logger.info(f"Metadata Integrity: {len(unique_indices)}/{self.length} frames synchronized.")
+        return metadata
+
+    def get_frame(self, index: int) -> tuple[np.ndarray, dict]:
+        """Returns the RGB frame and metadata for a given index."""
+        if index < 0:
+            index = self.length + index
+            
+        if index < 0 or index >= self.length:
+            raise IndexError(f"Frame index {index} out of bounds (0-{self.length-1})")
+            
+        pts = int(round(index * 1000 / self._fps))
+        self._container.seek(pts, stream=self._video_stream)
+        
+        for frame in self._container.decode(self._video_stream):
+            # Check if this frame is actually the one we wanted or later
+            # (seek might land earlier)
+            frame_idx = int(round(frame.pts * frame.time_base * self._fps))
+            if frame_idx >= index:
+                return frame.to_ndarray(format="rgb24"), self.metadata[index]
+        
+        raise RuntimeError(f"Could not seek to frame {index}")
+
+    def __getitem__(self, key: Union[int, slice]):
+        """Supports indexing and slicing of video frames."""
+        if isinstance(key, int):
+            return self.get_frame(key)
+        elif isinstance(key, slice):
+            indices = range(*key.indices(self.length))
+            return [self.get_frame(i) for i in indices]
+        else:
+            raise TypeError(f"Invalid argument type: {type(key)}")
+
+    def __iter__(self):
+        """Iterates through all frames in the video."""
         self._container.seek(0)
         idx = 0
-        for frame in self._container.decode(video=0):
-            if idx >= self.length:
-                break
-            meta = self.metadata[idx] if idx < len(self.metadata) else {}
-            yield frame.to_ndarray(format="rgb24"), meta
+        for frame in self._container.decode(self._video_stream):
+            if idx >= self.length: break
+            yield frame.to_ndarray(format="rgb24"), self.metadata[idx]
             idx += 1
 
-    def __enter__(self):
-        return self
+    def __enter__(self): return self
+    def __exit__(self, *args): self.close()
+    def close(self): self._container.close()
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def close(self):
-        """Close the underlying video container."""
-        if hasattr(self, '_container'):
-            self._container.close()
+    def find_frame_by_time(self, target_time: Union[str, datetime]) -> Optional[int]:
+        """Finds the first frame index matching the target time."""
+        if isinstance(target_time, str):
+            try:
+                target_dt = datetime.strptime(target_time, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Handle common EXIF format
+                target_dt = datetime.strptime(target_time, "%Y:%m:%d %H:%M:%S")
+        else:
+            target_dt = target_time
+            
+        for i, meta in enumerate(self.metadata):
+            if "time" in meta:
+                try:
+                    m_dt = datetime.strptime(meta["time"], "%Y:%m:%d %H:%M:%S")
+                except ValueError:
+                    m_dt = datetime.strptime(meta["time"], "%Y-%m-%d %H:%M:%S")
+                
+                if m_dt == target_dt:
+                    return i
+        return None

@@ -24,14 +24,18 @@ def _build_exif_bytes(meta: dict) -> bytes:
 
     # DateTimeOriginal
     if "time" in meta:
-        dt_str = meta["time"]  # "2023-01-01 12:00:00"
-        # EXIF format: "YYYY:MM:DD HH:MM:SS"
-        try:
-            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        dt_str = meta["time"]
+        # Try both common formats
+        dt = None
+        for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(dt_str, fmt)
+                break
+            except ValueError:
+                continue
+        if dt:
             exif_dt = dt.strftime("%Y:%m:%d %H:%M:%S")
             exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exif_dt.encode()
-        except ValueError:
-            pass
 
     # GPS coordinates
     if "lat" in meta and "lon" in meta:
@@ -76,7 +80,7 @@ def decompile_video(
     import shutil
 
     if remote and not REMOTE_AVAILABLE:
-        logger.error("pyremotedata is not installed. Remote output is unavailable.")
+        logger.error("pyremotedata is not installed. Remote output is unavailable. (pip install mini-timelapse[remote])")
         sys.exit(1)
 
     effective_output = output_dir
@@ -96,7 +100,10 @@ def decompile_video(
 
         from tqdm import tqdm
         for i, (frame_array, meta) in tqdm(enumerate(video), total=n, desc="Decompiling", unit="frame"):
-            filename = f"{prefix}_{str(i).zfill(pad)}.jpg"
+            if meta and "filename" in meta:
+                filename = meta["filename"]
+            else:
+                filename = f"{prefix}_{str(i).zfill(pad)}.jpg"
             out_path = os.path.join(effective_output, filename)
 
             img = Image.fromarray(frame_array)
