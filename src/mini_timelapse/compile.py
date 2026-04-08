@@ -268,7 +268,7 @@ def main():
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
     src, output = args.pop("input"), args.pop("output")
     if output is None:
-        output = os.path.basename(src) + ".mkv"
+        output = os.path.split(os.path.normpath(src))[-1] + ".mkv"
     remote = args.pop("remote", False)
     SourceCls = RemoteImageSource if remote else LocalImageSource
     compile_video(
