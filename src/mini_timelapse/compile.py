@@ -240,7 +240,10 @@ def compile_video(
     container = av.open(
         temp_video_path,
         mode="w",
-        options={"cluster_size_limit": "2048", "cluster_time_limit": "33"},
+        options={
+            "cluster_size_limit": "1048576",
+            "cluster_time_limit": "1000",
+        },
     )
 
     try:
@@ -282,7 +285,7 @@ def compile_video(
                 m_packet.stream = mstream
                 m_packet.pts = mpts
                 m_packet.dts = mpts
-                m_packet.duration = max(1, mdur - 2)
+                m_packet.duration = mdur
                 m_packet.is_keyframe = True
                 container.mux(m_packet)
 
