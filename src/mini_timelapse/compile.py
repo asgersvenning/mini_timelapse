@@ -66,7 +66,19 @@ def extract_image_metadata(img: PIL.Image.Image) -> dict:
     return meta
 
 
-class LocalImageSource:
+class BaseImageSource:
+    @property
+    def src(self) -> str:
+        raise NotImplementedError
+
+    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
+        raise NotImplementedError
+
+    def get_timelapse_spec(self) -> TimelapseSpec:
+        raise NotImplementedError
+
+
+class LocalImageSource(BaseImageSource):
     """Provides images from a local directory or file list."""
 
     def __init__(self, path: str):
@@ -76,6 +88,10 @@ class LocalImageSource:
             self.files.sort(key=natural_sort_key)
         else:
             self.files = [path]
+
+    @property
+    def src(self) -> str:
+        return self.path
 
     def get_timelapse_spec(self) -> TimelapseSpec:
         """Analyzes the first frame to determine video constraints and extract master EXIF."""
@@ -106,7 +122,7 @@ class LocalImageSource:
         pass
 
 
-class RemoteImageSource:
+class RemoteImageSource(BaseImageSource):
     """Provides images from a remote SFTP source via pyremotedata."""
 
     def __init__(self, url: str):
@@ -117,6 +133,10 @@ class RemoteImageSource:
         self.url = url
         self.handler = IOHandler()
         self.files = None
+
+    @property
+    def src(self) -> str:
+        return self.url
 
     def get_timelapse_spec(self) -> TimelapseSpec:
         """Downloads and analyzes the first frame to determine video constraints and extract master EXIF."""
@@ -183,8 +203,8 @@ def get_exif_data(path: str) -> dict:
 
 
 def compile_video(
-    source: LocalImageSource | RemoteImageSource,
-    output: str,
+    source: BaseImageSource,
+    output: str | None = None,
     fps: int = 30,
     quality: int = 23,
     preset: str = "medium",
@@ -195,9 +215,22 @@ def compile_video(
     1. Visible HUD via subtitle stream
     2. Sovereign 100% reliable backbone via Matroska attachments
     """
+    if output is None:
+        output = os.path.split(os.path.normpath(source.src))[-1] + ".mkv"
+
+    # RESUME CHECK: If the final file exists, we're already done.
+    if os.path.exists(output):
+        logger.info(f"Output video '{output}' already exists. Skipping compilation.")
+        return
+
     if dry_run:
         logger.info(f"Dry-run: would encode {len(source)} images to {output}")
         return
+
+    # Track temporary files for robust cleanup
+    meta_json_path = None
+    master_exif_path = None
+    final_part = output + ".part"
 
     temp_fd, temp_video_path = tempfile.mkstemp(suffix=".mkv")
     os.close(temp_fd)
@@ -210,31 +243,31 @@ def compile_video(
         options={"cluster_size_limit": "2048", "cluster_time_limit": "33"},
     )
 
-    with source:
-        spec = source.get_timelapse_spec()
+    try:
+        with source:
+            spec = source.get_timelapse_spec()
 
-        vstream = container.add_stream("libx264", rate=fps)
-        vstream.width = spec.width
-        vstream.height = spec.height
-        vstream.pix_fmt = "yuv444p"
+            vstream = container.add_stream("libx264", rate=fps)
+            vstream.width = spec.width
+            vstream.height = spec.height
+            vstream.pix_fmt = "yuv444p"
 
-        time_base = Fraction(1, 1000)
-        vstream.time_base = time_base
-        vstream.codec_context.time_base = time_base
+            time_base = Fraction(1, 1000)
+            vstream.time_base = time_base
+            vstream.codec_context.time_base = time_base
 
-        vstream.color_primaries = 1
-        vstream.color_trc = 1
-        vstream.colorspace = 1
-        vstream.options = {"crf": str(quality), "preset": preset, "tune": "zerolatency"}
+            vstream.color_primaries = 1
+            vstream.color_trc = 1
+            vstream.colorspace = 1
+            vstream.options = {"crf": str(quality), "preset": preset, "tune": "zerolatency"}
 
-        vstream.thread_count = 0
-        vstream.thread_type = "SLICE"
+            vstream.thread_count = 0
+            vstream.thread_type = "SLICE"
 
-        mstream = container.add_stream("ass")
-        mstream.time_base = time_base
-        mstream.codec_context.extradata = get_mkv_subtitle_header()
+            mstream = container.add_stream("ass")
+            mstream.time_base = time_base
+            mstream.codec_context.extradata = get_mkv_subtitle_header()
 
-        try:
             for i, (rgb_array, meta) in enumerate(tqdm(source, desc="Compiling", unit="frame")):
                 mpts = int(round(i * 1000 / fps))
                 next_mpts = int(round((i + 1) * 1000 / fps))
@@ -269,8 +302,6 @@ def compile_video(
             with open(meta_json_path, "w") as f:
                 json.dump(all_metadata, f)
 
-            # Dump the master EXIF binary to a temp file if it exists
-            master_exif_path = None
             if spec.master_exif:
                 exif_fd, master_exif_path = tempfile.mkstemp(suffix=".exif")
                 os.close(exif_fd)
@@ -279,7 +310,6 @@ def compile_video(
 
             logger.info("Mirroring metadata to Matroska attachments...")
 
-            # Dynamically build the FFmpeg command
             ffmpeg_cmd = [
                 "ffmpeg",
                 "-hide_banner",
@@ -296,7 +326,6 @@ def compile_video(
                 "filename=metadata.json",
             ]
 
-            # Inject the Master EXIF attachment if available
             if master_exif_path:
                 ffmpeg_cmd.extend(
                     [
@@ -309,27 +338,28 @@ def compile_video(
                     ]
                 )
 
-            ffmpeg_cmd.extend(["-c", "copy", output])
+            # Write out to the atomic .part file
+            ffmpeg_cmd.extend(["-c", "copy", final_part])
 
             try:
                 subprocess.run(ffmpeg_cmd, check=True)
-                logger.info(f"Successfully created: {output}")
             except Exception as e:
                 logger.error(f"Post-process attachment failed: {e}. Falling back to unattached video.")
-                shutil.copy2(temp_video_path, output)
-            finally:
-                if os.path.exists(temp_video_path):
-                    os.remove(temp_video_path)
-                if os.path.exists(meta_json_path):
-                    os.remove(meta_json_path)
-                if master_exif_path and os.path.exists(master_exif_path):
-                    os.remove(master_exif_path)
+                shutil.copy2(temp_video_path, final_part)
 
-        except Exception as e:
-            logger.error(f"Compilation failed: {e}")
-            if os.path.exists(temp_video_path):
-                os.remove(temp_video_path)
-            raise
+            os.replace(final_part, output)
+            logger.info(f"Successfully created: {output}")
+    except Exception as e:
+        logger.error(f"Compilation failed: {e}")
+        raise
+    finally:
+        # Ironclad cleanup for any temporary files generated during the process
+        for path in [temp_video_path, meta_json_path, master_exif_path, final_part]:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
 
 def cli():
@@ -351,8 +381,6 @@ def main():
     log_level = logging.DEBUG if args.get("verbose") else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
     src, output = args.pop("input"), args.pop("output")
-    if output is None:
-        output = os.path.split(os.path.normpath(src))[-1] + ".mkv"
     remote = args.pop("remote", False)
     SourceCls = RemoteImageSource if remote else LocalImageSource
     compile_video(

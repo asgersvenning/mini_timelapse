@@ -82,24 +82,13 @@ def decompile_video(
     quality: int = 95,
     remote: bool = False,
 ):
-    """
-    Extract all frames from a timelapse video back to individual JPEG images
-    with their original EXIF metadata (timestamps, GPS) restored.
-
-    Args:
-        video_path: Path to the compiled .mkv timelapse video.
-        output_dir: Directory or remote path to write the extracted images to.
-        prefix: Filename prefix for extracted images (e.g. "frame" -> frame_0000.jpg).
-        quality: JPEG save quality (1-100). Default: 95.
-        remote: If True, upload the final directory to a remote SFTP source.
-    """
     if remote and not REMOTE_AVAILABLE:
-        logger.error("pyremotedata is not installed. Remote output is unavailable. (pip install mini-timelapse[remote])")
+        logger.error("pyremotedata is not installed. Remote output is unavailable.")
         sys.exit(1)
 
     if output_dir is None:
         output_dir = os.path.splitext(video_path)[0]
-        os.makedirs(output_dir, exist_ok=True)
+
     effective_output = output_dir
     temp_dir_obj = None
 
@@ -114,7 +103,6 @@ def decompile_video(
         n = len(video)
         pad = max(6, len(str(n - 1)))
 
-        # Safely fetch the master EXIF attachment if the reader supports it
         master_exif_bytes = getattr(video, "master_exif", None)
         if master_exif_bytes:
             logger.info("Found master EXIF template. Decompiled images will retain original camera metadata.")
@@ -128,28 +116,38 @@ def decompile_video(
                 filename = meta["filename"]
             else:
                 filename = f"{prefix}_{str(i).zfill(pad)}.jpg"
+
             out_path = os.path.join(effective_output, filename)
+
+            # Robust Resume: Skip if fully written
             if os.path.exists(out_path):
-                logger.warning(f"File {out_path} already exists. Skipping.")
+                logger.debug(f"File {out_path} already exists. Skipping.")
                 continue
 
             img = Image.fromarray(frame_array)
 
-            # Build and insert EXIF if we have metadata, passing the master template
-            if meta:
-                exif_bytes = _build_exif_bytes(meta, master_exif=master_exif_bytes)
-                img.save(out_path, "JPEG", quality=quality, exif=exif_bytes)
-            else:
-                img.save(out_path, "JPEG", quality=quality)
+            # ATOMIC WRITE: Save to .tmp, then rename.
+            tmp_path = out_path + ".tmp"
+            try:
+                if meta:
+                    exif_bytes = _build_exif_bytes(meta, master_exif=master_exif_bytes)
+                    img.save(tmp_path, "JPEG", quality=quality, exif=exif_bytes)
+                else:
+                    img.save(tmp_path, "JPEG", quality=quality)
+
+                os.replace(tmp_path, out_path)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                raise
 
         if remote:
             logger.info(f"Uploading {n} images to remote: {output_dir}...")
             with IOHandler() as io:
-                # Use upload (mirror -R) for efficiency
                 io.upload(effective_output, output_dir)
 
             temp_dir_obj.cleanup()
-            logger.info(f"Done. Successfully uploaded images to {output_dir}/")
+            logger.info(f"Done. Uploaded images to {output_dir}/")
         else:
             logger.info(f"Done. Extracted {n} images to {output_dir}/")
 
