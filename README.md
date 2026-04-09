@@ -154,7 +154,7 @@ decompile_video(
 | Flag | Description | Default |
 |---|---|---|
 | `-i`, `--input` | Path to image directory, file, or glob pattern | *required* |
-| `-o`, `--output` | Output video path (`.mkv` strictly recommended) | *required* |
+| `-o`, `--output` | Output video path (`.mkv` strictly recommended) | derived from `input` |
 | `--fps` | Playback framerate | `30` |
 | `-q`, `--quality` | H.264 CRF quality (0–51, lower is better) | `23` |
 | `--preset` | x264 speed preset (`ultrafast` … `veryslow`) | `medium` |
@@ -167,7 +167,7 @@ decompile_video(
 | Flag | Description | Default |
 |---|---|---|
 | `-i`, `--input` | Path to compiled timelapse video | *required* |
-| `-o`, `--output` | Output directory for extracted images | *required* |
+| `-o`, `--output` | Output directory for extracted images | derived from `input` |
 | `--prefix` | Filename prefix (e.g., `frame` → `frame_000000.jpg`) | `frame` |
 | `-q`, `--quality` | JPEG save quality (1–100) | `95` |
 | `-v`, `--verbose` | Enable debug logging | |
