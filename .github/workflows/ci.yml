@@ -85,7 +85,7 @@ jobs:
     - name: Run Scalene Profiling
       run: |
         mkdir -p public/profiles
-        uv run scalene --html --outfile public/profiles/test_benchmarks.html --- -m pytest tests/test_benchmarks.py
+        uv run scalene run --html --outfile public/profiles/test_benchmarks.html --- -m pytest tests/test_benchmarks.py
         
         # Create a dynamic index page based on the event
         echo "<h1>Benchmark Profiles for ${{ steps.profile-vars.outputs.title }}</h1>" > public/index.html
@@ -96,11 +96,9 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./public
-        # This uses the dynamic directory we set in the earlier step
         destination_dir: ${{ steps.profile-vars.outputs.dir }}
 
     - name: Comment PR with links
-      # Only run this step if the event is a Pull Request
       if: github.event_name == 'pull_request'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
