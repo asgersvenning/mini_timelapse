@@ -46,10 +46,7 @@ jobs:
 
   profile:
     name: Line-by-Line Profiling
-    # We only run this on Pull Requests to generate the isolated reports and comments
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # Required permissions to push to gh-pages branch and comment on the PR
     permissions:
       contents: write
       pull-requests: write 
@@ -72,35 +69,44 @@ jobs:
       run: |
         uv sync --all-extras
         sudo apt-get install -y ffmpeg
-        # We install scalene dynamically here so it doesn't bloat your main dependencies
         uv pip install scalene 
+
+    - name: Determine Profile Directory
+      id: profile-vars
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          echo "dir=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          echo "title=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+        else
+          echo "dir=main" >> $GITHUB_OUTPUT
+          echo "title=Main Branch" >> $GITHUB_OUTPUT
+        fi
 
     - name: Run Scalene Profiling
       run: |
         mkdir -p public/profiles
-        
-        # We use '---' to separate Scalene's arguments from the script/pytest arguments
         uv run scalene --html --outfile public/profiles/test_benchmarks.html --- -m pytest tests/test_benchmarks.py
         
-        # Generate the index page
-        echo "<h1>Benchmark Profiles for PR #${{ github.event.pull_request.number }}</h1>" > public/index.html
-        echo "<ul>" >> public/index.html
-        echo "<li><a href='profiles/test_benchmarks.html'>View test_benchmarks.py Profile</a></li>" >> public/index.html
-        echo "</ul>" >> public/index.html
+        # Create a dynamic index page based on the event
+        echo "<h1>Benchmark Profiles for ${{ steps.profile-vars.outputs.title }}</h1>" > public/index.html
+        echo "<ul><li><a href='profiles/test_benchmarks.html'>View test_benchmarks.py Profile</a></li></ul>" >> public/index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./public
-        destination_dir: pr-${{ github.event.pull_request.number }}
+        # This uses the dynamic directory we set in the earlier step
+        destination_dir: ${{ steps.profile-vars.outputs.dir }}
 
     - name: Comment PR with links
+      # Only run this step if the event is a Pull Request
+      if: github.event_name == 'pull_request'
       uses: marocchino/sticky-pull-request-comment@v2
       with:
         header: profile-links
         message: |
           ### 🚀 Performance Profiling Completed
-          Interactive line-by-line profiling reports are ready!
+          Interactive line-by-line profiling reports for this PR are ready!
           
-          👉 **[Browse the Reports Here](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-${{ github.event.pull_request.number }}/)**
+          👉 **[Browse the PR Reports Here](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-${{ github.event.pull_request.number }}/)**

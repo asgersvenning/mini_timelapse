@@ -84,7 +84,7 @@ def decompile_video(
 ):
     if remote and not REMOTE_AVAILABLE:
         logger.error("pyremotedata is not installed. Remote output is unavailable.")
-        sys.exit(1)
+        raise ImportError("pyremotedata is not installed. Remote output is unavailable.")
 
     if output_dir is None:
         output_dir = os.path.splitext(video_path)[0]

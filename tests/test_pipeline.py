@@ -99,7 +99,7 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
             # Check counts
             if len(restored) != len(expected_meta):
                 print(f"✗ ERROR: Frame count mismatch: {len(restored)} vs {len(expected_meta)}")
-                sys.exit(1)
+                raise ValueError(f"Frame count mismatch: {len(restored)} vs {len(expected_meta)}")
 
             # Check raw timestamps (New robust check)
             import av
@@ -119,12 +119,12 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
 
                 if len(v_pts) != len(s_pts):
                     print(f"✗ ERROR: Stream packet count mismatch: video={len(v_pts)}, sub={len(s_pts)}")
-                    sys.exit(1)
+                    raise ValueError(f"Stream packet count mismatch: video={len(v_pts)}, sub={len(s_pts)}")
 
                 for i in range(len(v_pts)):
                     if abs(v_pts[i] - s_pts[i]) > 0.001:
                         print(f"✗ ERROR: Displacement at frame {i}: V={v_pts[i]:.4f}s, S={s_pts[i]:.4f}s")
-                        sys.exit(1)
+                        raise ValueError(f"Displacement at frame {i}: V={v_pts[i]:.4f}s, S={s_pts[i]:.4f}s")
             print("✓ Raw stream timestamps: 1:1 aligned")
 
             # Check metadata content
@@ -174,7 +174,7 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
                     if shift_p1 > 50:
                         print(f"  ⚠ DETECTED: Metadata is EARLY by 1 frame ({shift_p1} matches with shift +1)")
 
-                sys.exit(1)
+                raise ValueError(f"Metadata mismatch: {meta_ok}/{len(expected_meta)} frames OK")
             print(f"✓ Metadata: {meta_ok}/{len(expected_meta)} frames OK")
 
             # === Step 4: FFmpeg Parity Check ===
@@ -213,7 +213,7 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
 
             if srt_ok != len(expected_meta):
                 print(f"✗ ERROR: FFmpeg SRT parity mismatch: {srt_ok}/{len(expected_meta)} found.")
-                sys.exit(1)
+                raise ValueError(f"FFmpeg SRT parity mismatch: {srt_ok}/{len(expected_meta)} found.")
             print(f"✓ FFmpeg Parity: {srt_ok}/{len(expected_meta)} frames found in SRT")
 
     print("\n" + "=" * 50)
