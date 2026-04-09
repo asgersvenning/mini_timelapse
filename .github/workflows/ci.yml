@@ -65,11 +65,11 @@ jobs:
         enable-cache: true
         cache-dependency-glob: "uv.lock"
 
-    - name: Install dependencies & Scalene
+    - name: Install dependencies & pyinstrument
       run: |
         uv sync --all-extras
         sudo apt-get install -y ffmpeg
-        uv pip install scalene 
+        uv pip install pyinstrument
 
     - name: Determine Profile Directory
       id: profile-vars
@@ -82,29 +82,25 @@ jobs:
           echo "title=Main Branch" >> $GITHUB_OUTPUT
         fi
 
-    - name: Run Scalene Profiling
+    - name: Run Pyinstrument Profiling
       run: |
         mkdir -p public/profiles
         
-        # 1. Run the profiler (Explicitly save as .json)
-        uv run scalene run -o public/profiles/test_benchmarks.json --- -m pytest tests/test_benchmarks.py
+        # Execute the test file directly to trigger the __main__ block
+        uv run python tests/test_benchmarks.py
         
-        # 2. Convert the JSON profile to a self-contained HTML file
-        uv run scalene view --html --standalone public/profiles/test_benchmarks.json
-        
-        # 3. Locate the generated HTML file and move it to our public directory.
-        # This wildcard search catches both 'profile.html' and 'scalene-profile.html'
-        html_file=$(find . -maxdepth 1 -name "*profile*.html" | head -n 1)
-        if [ -n "$html_file" ]; then
-          mv "$html_file" public/profiles/test_benchmarks.html
-          echo "Successfully moved $html_file to public/profiles/"
-        else
-          echo "Warning: Scalene did not output an HTML file in the root directory!"
-        fi
-        
-        # Create a dynamic index page based on the event
+        # Create a dynamic index page linking to all generated profiles
         echo "<h1>Benchmark Profiles for ${{ steps.profile-vars.outputs.title }}</h1>" > public/index.html
-        echo "<ul><li><a href='profiles/test_benchmarks.html'>View test_benchmarks.py Profile</a></li></ul>" >> public/index.html
+        echo "<ul>" >> public/index.html
+        
+        # Loop through all generated HTML files and create links
+        for file in public/profiles/*.html; do
+          filename=$(basename "$file")
+          name_without_ext="${filename%.html}"
+          echo "<li><a href='profiles/$filename'>View $name_without_ext</a></li>" >> public/index.html
+        done
+        
+        echo "</ul>" >> public/index.html
     
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4

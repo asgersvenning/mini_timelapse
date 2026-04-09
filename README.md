@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://github.com/asgersvenning/mini_timelapse/actions/workflows/ci.yml/badge.svg)](https://github.com/asgersvenning/mini_timelapse/actions)
 [![codecov](https://codecov.io/github/asgersvenning/mini_timelapse/graph/badge.svg)](https://codecov.io/github/asgersvenning/mini_timelapse)
-[![Scalene Profile](https://img.shields.io/badge/Scalene-Profile-3776AB?logo=python&logoColor=white)](https://asgersvenning.github.io/mini_timelapse/main/)
+[![Pyinstrument Profile](https://img.shields.io/badge/Pyinstrument-Profile-3776AB?logo=python&logoColor=white)](https://asgersvenning.github.io/mini_timelapse/main/)
 
 ---
 

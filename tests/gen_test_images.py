@@ -76,7 +76,6 @@ def generate_test_images(dst_dir: str, num_images: int = 10, size: tuple[int, in
 
         path = os.path.join(dst_dir, f"img_{i}.jpg")
         img.save(path, "jpeg", quality=95, exif=exif_bytes)
-        print(f"Generated {path} with time: {dt_curr} at Lat: {lat}, Lon: {lon}")
 
         expected.append(
             {
