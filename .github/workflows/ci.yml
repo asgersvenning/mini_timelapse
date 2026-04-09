@@ -1,0 +1,106 @@
+name: Tests & Profiling
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    name: Pytest & Coverage
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Install dependencies
+      run: |
+        uv sync --all-extras
+        sudo apt-get install -y ffmpeg
+
+    - name: Run tests with coverage
+      run: |
+        uv run pytest --cov=mini_timelapse --cov-report=xml --cov-report=term tests/
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        slug: asgersvenning/mini_timelapse
+
+  profile:
+    name: Line-by-Line Profiling
+    # We only run this on Pull Requests to generate the isolated reports and comments
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Required permissions to push to gh-pages branch and comment on the PR
+    permissions:
+      contents: write
+      pull-requests: write 
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Install dependencies & Scalene
+      run: |
+        uv sync --all-extras
+        sudo apt-get install -y ffmpeg
+        # We install scalene dynamically here so it doesn't bloat your main dependencies
+        uv pip install scalene 
+
+    - name: Run Scalene Profiling
+      run: |
+        mkdir -p public/profiles
+        
+        # We use '---' to separate Scalene's arguments from the script/pytest arguments
+        uv run scalene --html --outfile public/profiles/test_benchmarks.html --- -m pytest tests/test_benchmarks.py
+        
+        # Generate the index page
+        echo "<h1>Benchmark Profiles for PR #${{ github.event.pull_request.number }}</h1>" > public/index.html
+        echo "<ul>" >> public/index.html
+        echo "<li><a href='profiles/test_benchmarks.html'>View test_benchmarks.py Profile</a></li>" >> public/index.html
+        echo "</ul>" >> public/index.html
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./public
+        destination_dir: pr-${{ github.event.pull_request.number }}
+
+    - name: Comment PR with links
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        header: profile-links
+        message: |
+          ### 🚀 Performance Profiling Completed
+          Interactive line-by-line profiling reports are ready!
+          
+          👉 **[Browse the Reports Here](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-${{ github.event.pull_request.number }}/)**

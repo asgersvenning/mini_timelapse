@@ -1,0 +1,37 @@
+name: Cleanup PR Profile
+
+on:
+  pull_request:
+    # This triggers when a PR is either merged or closed without merging
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Need write permissions to modify the gh-pages branch
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout GitHub Pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages # This is the default branch used by the deployment action
+
+      - name: Remove PR Profile Directory
+        run: |
+          # Set up the standard GitHub Actions bot git user
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          DIR_NAME="pr-${{ github.event.pull_request.number }}"
+          
+          # Check if the directory exists before trying to delete it
+          if [ -d "$DIR_NAME" ]; then
+            git rm -rf "$DIR_NAME"
+            git commit -m "chore: cleanup profiling data for closed PR #${{ github.event.pull_request.number }}"
+            git push
+            echo "✅ Successfully deleted $DIR_NAME"
+          else
+            echo "ℹ️ Directory $DIR_NAME does not exist. Nothing to clean up."
+          fi

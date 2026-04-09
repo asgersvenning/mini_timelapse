@@ -339,7 +339,7 @@ def compile_video(
                 )
 
             # Write out to the atomic .part file
-            ffmpeg_cmd.extend(["-c", "copy", final_part])
+            ffmpeg_cmd.extend(["-c", "copy", "-f", "matroska", final_part])
 
             try:
                 subprocess.run(ffmpeg_cmd, check=True)
