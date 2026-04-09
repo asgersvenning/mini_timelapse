@@ -1,21 +1,24 @@
-import av
-import os
 import json
 import logging
+import os
 import subprocess
 import tempfile
 from datetime import datetime
-from typing import List, Optional, Union
+
+import av
 import numpy as np
+
 from mini_timelapse.metadata import decode_metadata_payload
 
 logger = logging.getLogger(__name__)
+
 
 class TimelapseVideo:
     """
     A high-level interface for reading and decompiling timelapse videos
     with frame-accurate metadata recovery.
     """
+
     def __init__(self, path: str, fps: float = 30.0):
         self.path = path
         self._fps = fps
@@ -23,7 +26,7 @@ class TimelapseVideo:
         self._video_stream = next((s for s in self._container.streams if s.type == "video"), None)
         if not self._video_stream:
             raise ValueError(f"No video stream found in {path}")
-            
+
         self.width = self._video_stream.width
         self.height = self._video_stream.height
         self.length = self._video_stream.frames
@@ -35,7 +38,7 @@ class TimelapseVideo:
                 # container.duration is in av.time_base (microseconds)
                 self.length = int(round(float(self._container.duration / av.time_base) * fps))
             else:
-                self.length = 0 
+                self.length = 0
 
         # Extract metadata
         self.metadata = self._extract_metadata()
@@ -43,7 +46,7 @@ class TimelapseVideo:
     def __len__(self):
         return self.length
 
-    def _extract_metadata(self) -> List[dict]:
+    def _extract_metadata(self) -> list[dict]:
         """
         Extracts metadata using the most reliable source available:
         1. Sovereign Backbone: Matroska JSON attachment (added via post-process)
@@ -52,24 +55,32 @@ class TimelapseVideo:
         """
         metadata_dict = {}
         unique_indices = set()
-        
+
         # 1. SOVEREIGN PATH: Matroska Attachment (Atomic & 100% Reliable)
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_json = os.path.join(tmp_dir, "extracted_meta.json")
                 cmd = [
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                    "-dump_attachment:t:0", tmp_json,
-                    "-i", self.path,
-                    "-f", "null", "-"
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-dump_attachment:t:0",
+                    tmp_json,
+                    "-i",
+                    self.path,
+                    "-f",
+                    "null",
+                    "-",
                 ]
                 # Run with timeout to prevent hangs
                 subprocess.run(cmd, timeout=10, check=True, capture_output=True)
-                
+
                 if os.path.exists(tmp_json):
-                    with open(tmp_json, "r") as f:
+                    with open(tmp_json) as f:
                         attachment_data = json.load(f)
-                    
+
                     if isinstance(attachment_data, list):
                         logger.info(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
                         for item in attachment_data:
@@ -85,14 +96,21 @@ class TimelapseVideo:
             if sub_stream:
                 try:
                     cmd = [
-                        "ffmpeg", "-hide_banner", "-loglevel", "error",
-                        "-i", self.path,
-                        "-map", f"0:{sub_stream.index}",
-                        "-f", "srt", "-"
+                        "ffmpeg",
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        self.path,
+                        "-map",
+                        f"0:{sub_stream.index}",
+                        "-f",
+                        "srt",
+                        "-",
                     ]
                     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     stdout, _ = process.communicate()
-                    
+
                     if process.returncode == 0:
                         srt_text = stdout.decode("utf-8", errors="ignore")
                         meta_items = decode_metadata_payload(srt_text)
@@ -121,7 +139,8 @@ class TimelapseVideo:
                                         if idx != -1 and idx not in metadata_dict:
                                             metadata_dict[idx] = item
                                             unique_indices.add(idx)
-                    except: pass
+                    except Exception:
+                        pass
                     for item in decode_metadata_payload(bytes(packet)):
                         idx = int(item.get("index", -1))
                         if idx != -1 and idx not in metadata_dict:
@@ -133,31 +152,60 @@ class TimelapseVideo:
         for idx, item in metadata_dict.items():
             if 0 <= idx < self.length:
                 metadata[idx] = item
-                
+
         logger.info(f"Metadata Integrity: {len(unique_indices)}/{self.length} frames synchronized.")
         return metadata
+
+    @property
+    def master_exif(self) -> bytes | None:
+        """Attempts to extract the original raw EXIF binary attachment."""
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_exif = os.path.join(tmp_dir, "master.exif")
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-dump_attachment:t",
+                    tmp_exif,  # Extracts all attachments, we just read the EXIF one
+                    "-i",
+                    self.path,
+                    "-f",
+                    "null",
+                    "-",
+                ]
+                subprocess.run(cmd, timeout=10, capture_output=True)
+
+                if os.path.exists(tmp_exif):
+                    with open(tmp_exif, "rb") as f:
+                        return f.read()
+        except Exception as e:
+            logger.debug(f"Could not extract master EXIF attachment: {e}")
+        return None
 
     def get_frame(self, index: int) -> tuple[np.ndarray, dict]:
         """Returns the RGB frame and metadata for a given index."""
         if index < 0:
             index = self.length + index
-            
+
         if index < 0 or index >= self.length:
-            raise IndexError(f"Frame index {index} out of bounds (0-{self.length-1})")
-            
+            raise IndexError(f"Frame index {index} out of bounds (0-{self.length - 1})")
+
         pts = int(round(index * 1000 / self._fps))
         self._container.seek(pts, stream=self._video_stream)
-        
+
         for frame in self._container.decode(self._video_stream):
             # Check if this frame is actually the one we wanted or later
             # (seek might land earlier)
             frame_idx = int(round(frame.pts * frame.time_base * self._fps))
             if frame_idx >= index:
                 return frame.to_ndarray(format="rgb24"), self.metadata[index]
-        
+
         raise RuntimeError(f"Could not seek to frame {index}")
 
-    def __getitem__(self, key: Union[int, slice]):
+    def __getitem__(self, key: int | slice):
         """Supports indexing and slicing of video frames."""
         if isinstance(key, int):
             return self.get_frame(key)
@@ -172,15 +220,21 @@ class TimelapseVideo:
         self._container.seek(0)
         idx = 0
         for frame in self._container.decode(self._video_stream):
-            if idx >= self.length: break
+            if idx >= self.length:
+                break
             yield frame.to_ndarray(format="rgb24"), self.metadata[idx]
             idx += 1
 
-    def __enter__(self): return self
-    def __exit__(self, *args): self.close()
-    def close(self): self._container.close()
+    def __enter__(self):
+        return self
 
-    def find_frame_by_time(self, target_time: Union[str, datetime]) -> Optional[int]:
+    def __exit__(self, *args):
+        self.close()
+
+    def close(self):
+        self._container.close()
+
+    def find_frame_by_time(self, target_time: str | datetime) -> int | None:
         """Finds the first frame index matching the target time."""
         if isinstance(target_time, str):
             try:
@@ -190,14 +244,14 @@ class TimelapseVideo:
                 target_dt = datetime.strptime(target_time, "%Y:%m:%d %H:%M:%S")
         else:
             target_dt = target_time
-            
+
         for i, meta in enumerate(self.metadata):
             if "time" in meta:
                 try:
                     m_dt = datetime.strptime(meta["time"], "%Y:%m:%d %H:%M:%S")
                 except ValueError:
                     m_dt = datetime.strptime(meta["time"], "%Y-%m-%d %H:%M:%S")
-                
+
                 if m_dt == target_dt:
                     return i
         return None

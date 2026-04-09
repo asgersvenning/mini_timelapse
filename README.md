@@ -10,6 +10,30 @@
 
 It maps each source image to exactly one video frame (1:1), embeds the original EXIF timestamps and GPS coordinates as a strictly interleaved data stream, and provides a Python API for temporal and random-access frame retrieval.
 
+When reconstructing the frames, the original EXIF data is attempted to be restored, however this is done under the assumption that only the timestamp and GPS coordinates can change between frames, while the remaining EXIF tags are assumed to be constant. If this is not the case, the reconstructed frames will not have the correct EXIF data.
+
+To view the video with the embedded metadata I recommend [MPC-HC](https://github.com/clsid2/mpc-hc), the timestamps are embedded as a subtitle track and can be toggled on and off with the `s` key. 
+
+### Data Recovery Philosophy
+
+The primary and recommended way to read or extract the compiled data is to use the `mini-timelapse` Python module (see the [Python API](#python-api) section) or the `timelapse-decompile` CLI. The module automatically parses the dual-layer metadata and handles the complex task of patching the original EXIF bytes.
+
+However, to ensure your data is never locked behind a proprietary tool, the metadata is stored using standard Matroska structures. **You do not strictly need this Python package to recover your data.** For quick debugging, bash scripting, or integration into environments where installing new dependencies is difficult, you can extract the raw data manually using standard `ffmpeg`:
+
+1. **Native MKV Attachments (Sovereign Data)**: A pristine `metadata.json` and the original `master.exif` binary template are securely attached directly to the container.
+2. **Visible Subtitle Track**: A strictly interleaved subtitle stream acts as a visual HUD and a secondary data fallback.
+
+```bash
+# 1. Extract the sovereign JSON metadata array
+ffmpeg -dump_attachment:t:0 metadata.json -i timelapse.mkv -y
+
+# 2. Extract the master EXIF binary template
+ffmpeg -dump_attachment:t:1 master.exif -i timelapse.mkv -y
+
+# 3. Extract the visual HUD to a standard SRT file
+ffmpeg -i timelapse.mkv -map 0:s:0 -f srt extracted_subtitles.srt
+```
+
 ## Features
 
 * **Compile**: Converts a directory of JPEGs/PNGs into a single `.mkv` file with interleaved metadata.
@@ -26,11 +50,19 @@ Requires **Python ≥ 3.12**.
 Using [uv](https://docs.astral.sh/uv/) (recommended):
 ```bash
 uv pip install -e .
+# For remote access
+uv pip install -e .[remote]
+# For testing
+uv pip install -e .[test]
 ```
 
 Using standard pip:
 ```bash
 pip install -e .
+# For remote access
+pip install -e .[remote]
+# For testing
+pip install -e .[test]
 ```
 
 ## Quick Start

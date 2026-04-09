@@ -29,6 +29,18 @@ remote = [
 test = [
     "pytest>=8.0.0",
 ]
+dev = [
+    "ruff>=0.3.0",
+    "pytest>=8.0.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+
+[tool.ruff.lint]
+# E: pycodestyle, F: Pyflakes, UP: pyupgrade, I: isort (sorts imports cleanly)
+select = ["E", "F", "UP", "I"]
 
 [project.scripts]
 timelapse-compile = "mini_timelapse.compile:main"
