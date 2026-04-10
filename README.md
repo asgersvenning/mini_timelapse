@@ -124,7 +124,12 @@ with TimelapseVideo("timelapse.mkv") as video:
 ```python
 from mini_timelapse.compile import compile_video, LocalImageSource
 
-with LocalImageSource("./my_photos/") as source:
+src_spec = LocalImageSource.SourceSpec(
+    src="./my_photos/",
+    recursive=True,
+    n_max=100
+)
+with LocalImageSource(spec=src_spec) as source:
     compile_video(
         source=source,
         output="timelapse.mkv",

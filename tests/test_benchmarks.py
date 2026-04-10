@@ -138,7 +138,8 @@ if __name__ == "__main__":
     video_path = os.path.join(tmp_dir, "test.mkv")
 
     generate_test_images(img_dir, num_images=1000, size=(1280, 720))
-    with LocalImageSource(img_dir) as source:
+    src_spec = LocalImageSource.SourceSpec(src=img_dir)
+    with LocalImageSource(spec=src_spec) as source:
         compile_video(source, video_path, fps=30, quality=23)
 
     mock_data = {"img_dir": img_dir, "video_path": video_path, "tmp_dir": tmp_dir}
