@@ -43,29 +43,46 @@ ffmpeg -i timelapse.mkv -map 0:s:0 -f srt extracted_subtitles.srt
 * **Lossless Color**: Encodes using the `yuv444p` color space to preserve 100% of the original RGB chroma data.
 * **Temporal Search**: Query frames by their actual real-world capture time.
 * **Remote IO**: Supports direct compilation from and decompilation to SFTP/ERDA storage via [pyremotedata](https://github.com/asgersvenning/pyremotedata).
-* **Standalone**: Built on [PyAV](https://pyav.org/) — no system FFmpeg installation required.
 
 ## Installation
 
-Requires **Python ≥ 3.12**.
+### 1. Prerequisites
 
-Using [uv](https://docs.astral.sh/uv/) (recommended):
+*   **Python 3.12+**
+*   **FFmpeg**: Required for embedding and extracting Matroska attachments and metadata.
+
+| Platform | Command |
+| :--- | :--- |
+| **Ubuntu/Debian** | `sudo apt update && sudo apt install -y ffmpeg` |
+| **macOS** | `brew install ffmpeg` |
+| **Windows** | `winget install ffmpeg` |
+
+### 2. Setup
+
+#### Option A: Using [uv](https://docs.astral.sh/uv/) (Recommended)
+
+One command to set up the environment and install all dependencies in **editable mode**:
 ```bash
-uv pip install -e .
-# For remote access
-uv pip install -e .[remote]
-# For testing
-uv pip install -e .[test]
+uv sync --all-extras
+
+# Run commands directly (no activation required)
+uv run timelapse-compile --help
 ```
 
-Using standard pip:
+#### Option B: Using standard `pip`
+
 ```bash
-pip install -e .
-# For remote access
-pip install -e .[remote]
-# For testing
-pip install -e .[test]
+# 1. Create and activate environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# 2. Install package in editable mode
+pip install -e ".[remote]"
 ```
+
+---
+
+
 
 ## Quick Start
 
