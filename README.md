@@ -88,13 +88,13 @@ pip install -e ".[remote]"
 
 ### 1. Compile images to video
 ```bash
-timelapse-compile -i ./my_photos/ -o timelapse.mkv
+[uv run] timelapse-compile -i ./my_photos/ -o timelapse.mkv
 ```
 Frames are sorted chronologically (using natural sort for filenames) and encoded 1:1 into the container. 
 
 ### 2. Decompile video back to images
 ```bash
-timelapse-decompile -i timelapse.mkv -o ./extracted/
+[uv run] timelapse-decompile -i timelapse.mkv -o ./extracted/
 ```
 Each frame is extracted as a JPEG with its original EXIF tags restored.
 
@@ -105,10 +105,10 @@ export PYREMOTEDATA_REMOTE_USERNAME="myuser"
 export PYREMOTEDATA_REMOTE_HOSTNAME="io.erda.dk"
 
 # Compile from remote
-timelapse-compile -i /remote/path/to/images/ -o timelapse.mkv --remote
+[uv run] timelapse-compile -i /remote/path/to/images/ -o timelapse.mkv --remote
 
 # Decompile to remote
-timelapse-decompile -i timelapse.mkv -o /remote/output/folder/ --remote
+[uv run] timelapse-decompile -i timelapse.mkv -o /remote/output/folder/ --remote
 ```
 
 ## Python API
