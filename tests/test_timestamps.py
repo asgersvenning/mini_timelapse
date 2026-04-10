@@ -22,12 +22,13 @@ def test_subtitle_alignment():
     os.makedirs(tmp_root)
 
     src_dir = os.path.join(tmp_root, "src")
+    src_spec = LocalImageSource.SourceSpec(src=src_dir)
     generate_test_images(src_dir, num_images=50)
 
     video_path = os.path.join(tmp_root, "test.mkv")
     fps = 30
 
-    with LocalImageSource(src_dir) as source:
+    with LocalImageSource(spec=src_spec) as source:
         compile_video(source, video_path, fps=fps, quality=23, preset="ultrafast", dry_run=False)
 
     # Verify timestamps

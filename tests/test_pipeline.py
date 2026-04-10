@@ -65,11 +65,12 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
             synthetic = src_dir is None
             if synthetic:
                 it_src_dir = os.path.join(tmp_root, "src")
+                src_spec = LocalImageSource.SourceSpec(src=it_src_dir)
                 expected_meta = generate_test_images(it_src_dir, num_images=10000)
                 src_images = [e["path"] for e in expected_meta]
             else:
-                it_src_dir = src_dir
-                with LocalImageSource(it_src_dir) as source:
+                src_spec = LocalImageSource.SourceSpec(src=src_dir)
+                with LocalImageSource(spec=src_spec) as source:
                     src_images = source.paths
                     expected_meta = []
                     for path in src_images:
@@ -87,7 +88,8 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
 
             # === Step 1: Compile ===
             print("--- Step 1: Compiling ---")
-            with LocalImageSource(it_src_dir) as source:
+
+            with LocalImageSource(spec=src_spec) as source:
                 compile_video(source, video_path, fps=30, quality=23, preset="ultrafast", dry_run=False)
 
             # === Step 2: Decompile ===
@@ -209,7 +211,7 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
                 # OPTIMIZATION: Pre-parse all indices once to avoid O(N^2) scan
                 found_indices = set()
                 metadata_blocks = re.findall(r"###METADATA_START###(.*?)###METADATA_END###", srt_content)
-                
+
                 for block in metadata_blocks:
                     block = block.strip()
                     try:
@@ -219,7 +221,7 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
                             if "index" in data:
                                 found_indices.add(int(data["index"]))
                             continue
-                        
+
                         # Try Base64
                         decoded_bytes = base64.b64decode(block)
                         decoded = decoded_bytes.decode("utf-8")

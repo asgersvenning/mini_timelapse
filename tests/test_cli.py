@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
+from mini_timelapse.compile import BaseImageSource
 from mini_timelapse.compile import main as compile_main
 from mini_timelapse.decompile import main as decompile_main
 
@@ -15,7 +16,7 @@ def test_compile_cli_basic():
                 compile_main()
 
                 # Verify Source initialization
-                mock_source.assert_called_once_with("test_input")
+                mock_source.assert_called_once_with(BaseImageSource.SourceSpec(src="test_input"))
 
                 # Verify compile_video call
                 mock_compile.assert_called_once()
@@ -46,7 +47,9 @@ def test_compile_cli_remote():
         with patch("mini_timelapse.compile.compile_video") as mock_compile:
             with patch("mini_timelapse.compile.RemoteImageSource") as mock_remote:
                 compile_main()
-                mock_remote.assert_called_once_with("sftp://host/path")
+                mock_remote.assert_called_once_with(
+                    BaseImageSource.SourceSpec(src="sftp://host/path", n_max=None, recursive=False), sharelink_id=None, preext_pattern=None
+                )
                 mock_compile.assert_called_once()
 
 
@@ -70,7 +73,9 @@ def test_decompile_cli_basic():
         with patch("mini_timelapse.decompile.decompile_video") as mock_decompile:
             decompile_main()
 
-            mock_decompile.assert_called_once_with(video_path="input.mkv", output_dir="out_dir", prefix="img", quality=90, remote=False)
+            mock_decompile.assert_called_once_with(
+                video_path="input.mkv", output_dir="out_dir", prefix="img", quality=90, remote=False, sharelink_id=None
+            )
 
 
 def test_decompile_cli_remote():
@@ -80,7 +85,9 @@ def test_decompile_cli_remote():
         with patch("mini_timelapse.decompile.decompile_video") as mock_decompile:
             decompile_main()
 
-            mock_decompile.assert_called_once_with(video_path="input.mkv", output_dir="sftp://out", prefix="frame", quality=95, remote=True)
+            mock_decompile.assert_called_once_with(
+                video_path="input.mkv", output_dir="sftp://out", prefix="frame", quality=95, remote=True, sharelink_id=None
+            )
 
 
 def test_cli_missing_required():

@@ -24,6 +24,7 @@ def test_reader_functionality():
     tmp_dir = tempfile.mkdtemp(prefix="reader_test_")
     try:
         src_dir = os.path.join(tmp_dir, "src")
+        src_spec = LocalImageSource.SourceSpec(src=src_dir)
         video_path = os.path.join(tmp_dir, "test.mkv")
         num_frames = 250
 
@@ -32,7 +33,7 @@ def test_reader_functionality():
         expected_meta = generate_test_images(src_dir, num_images=num_frames)
 
         print("--- Step 2: Compiling video ---")
-        with LocalImageSource(src_dir) as source:
+        with LocalImageSource(spec=src_spec) as source:
             compile_video(source, video_path, fps=30, quality=23, preset="ultrafast")
 
         # 2. Open Video

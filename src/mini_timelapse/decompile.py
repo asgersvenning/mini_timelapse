@@ -199,7 +199,9 @@ def cli():
         "--sharelink_id",
         type=int,
         required=False,
-        help="Sharelink ID for ERDA. If provided, pyremotedata will attempt an anonymous login with the given sharelink id as both username and password.",
+        help="Sharelink ID for ERDA. "
+        "If provided, pyremotedata will attempt an anonymous login "
+        "with the given sharelink id as both username and password.",
     )
     return parser.parse_args()
 

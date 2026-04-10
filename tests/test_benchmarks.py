@@ -30,11 +30,13 @@ def benchmark_data():
     img_dir = os.path.join(tmp_dir, "images")
     video_path = os.path.join(tmp_dir, "test.mkv")
 
+    src_spec = LocalImageSource.SourceSpec(src=img_dir)
+
     # Generate 100 images for a meaningful benchmark
     generate_test_images(img_dir, num_images=100, size=(1280, 720))
 
     # Pre-compile the video for reader benchmarks
-    with LocalImageSource(img_dir) as source:
+    with LocalImageSource(spec=src_spec) as source:
         compile_video(source, video_path, fps=30, quality=23)
 
     yield {"img_dir": img_dir, "video_path": video_path, "tmp_dir": tmp_dir}
@@ -45,11 +47,12 @@ def benchmark_data():
 def test_benchmark_compilation(benchmark, benchmark_data):
     """Benchmark video compilation speed."""
     output_path = os.path.join(benchmark_data["tmp_dir"], "bench_compile.mkv")
+    src_spec = LocalImageSource.SourceSpec(src=benchmark_data["img_dir"])
 
     def run_compilation(*args, **kwargs):
         if os.path.exists(output_path):
             os.remove(output_path)
-        with LocalImageSource(benchmark_data["img_dir"]) as source:
+        with LocalImageSource(spec=src_spec) as source:
             compile_video(source, output_path, fps=30, quality=23)
 
     benchmark.pedantic(run_compilation, rounds=5, iterations=1)
