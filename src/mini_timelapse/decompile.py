@@ -80,6 +80,7 @@ def decompile_video(
     prefix: str = "frame",
     quality: int = 95,
     remote: bool = False,
+    sharelink_id: int | None = None,
 ):
     if remote and not REMOTE_AVAILABLE:
         logger.error("pyremotedata is not installed. Remote output is unavailable.")
@@ -142,7 +143,7 @@ def decompile_video(
 
         if remote:
             logger.info(f"Uploading {n} images to remote: {output_dir}...")
-            with IOHandler() as io:
+            with IOHandler(user=sharelink_id, password=sharelink_id) as io:
                 io.upload(effective_output, output_dir)
 
             temp_dir_obj.cleanup()
@@ -194,6 +195,12 @@ def cli():
         action="store_true",
         help="Upload extracted images to a remote SFTP destination via pyremotedata.",
     )
+    parser.add_argument(
+        "--sharelink_id",
+        type=int,
+        required=False,
+        help="Sharelink ID for ERDA. If provided, pyremotedata will attempt an anonymous login with the given sharelink id as both username and password.",
+    )
     return parser.parse_args()
 
 
@@ -208,6 +215,7 @@ def main():
         prefix=args.prefix,
         quality=args.quality,
         remote=args.remote,
+        sharelink_id=args.sharelink_id,
     )
 
 

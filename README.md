@@ -161,6 +161,9 @@ decompile_video(
 | `-d`, `--dry-run` | Log actions without encoding | |
 | `-v`, `--verbose` | Enable debug logging | |
 | `--remote` | Use pyremotedata backend for SFTP access | |
+| `--sharelink_id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
+| `--preext_pattern` | Optional regex pattern matched to the file path, excluding the file extension | `None` |
+
 
 ### `timelapse-decompile`
 
@@ -172,6 +175,7 @@ decompile_video(
 | `-q`, `--quality` | JPEG save quality (1–100) | `95` |
 | `-v`, `--verbose` | Enable debug logging | |
 | `--remote` | Upload extracted images to SFTP destination | |
+| `--sharelink_id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
 
 ## Architecture Details
 

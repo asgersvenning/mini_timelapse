@@ -67,8 +67,28 @@ def extract_image_metadata(img: PIL.Image.Image) -> dict:
 
 
 class BaseImageSource:
+    @dataclass
+    class SourceSpec:
+        src: str
+        n_max: int | None = None
+        recursive: bool = False
+
+    def __init__(self, spec: SourceSpec):
+        self.spec = spec
+
     @property
-    def src(self) -> str:
+    def src(self):
+        return self.spec.src
+
+    @property
+    def n_max(self):
+        return self.spec.n_max
+
+    @property
+    def recursive(self):
+        return self.spec.recursive
+
+    def __enter__(self):
         raise NotImplementedError
 
     def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
@@ -81,17 +101,25 @@ class BaseImageSource:
 class LocalImageSource(BaseImageSource):
     """Provides images from a local directory or file list."""
 
-    def __init__(self, path: str):
-        self.path = path
-        if os.path.isdir(path):
-            self.files = [os.path.join(path, f) for f in os.listdir(path) if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff"))]
+    def __init__(self, spec: BaseImageSource.SourceSpec):
+        super().__init__(spec)
+        if os.path.isdir(self.src):
+            if self.recursive:
+                self.files = [
+                    os.path.join(root, f)
+                    for root, dirs, files in os.walk(self.src)
+                    for f in files
+                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff"))
+                ]
+            else:
+                self.files = [
+                    os.path.join(self.src, f) for f in os.listdir(self.src) if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff"))
+                ]
             self.files.sort(key=natural_sort_key)
         else:
-            self.files = [path]
-
-    @property
-    def src(self) -> str:
-        return self.path
+            self.files = [self.src]
+        if self.n_max is not None:
+            self.files = self.files[: min(len(self.files), self.n_max)]
 
     def get_timelapse_spec(self) -> TimelapseSpec:
         """Analyzes the first frame to determine video constraints and extract master EXIF."""
@@ -125,23 +153,21 @@ class LocalImageSource(BaseImageSource):
 class RemoteImageSource(BaseImageSource):
     """Provides images from a remote SFTP source via pyremotedata."""
 
-    def __init__(self, url: str):
+    def __init__(self, spec: BaseImageSource.SourceSpec, sharelink_id: int | None = None, preext_pattern: str | None = None):
+        super().__init__(spec)
         if IOHandler is None or RemotePathIterator is None:
             raise ImportError(
                 "pyremotedata is not installed. Please install it to use remote sources (pip install mini-timelapse[remote])."
             )
-        self.url = url
-        self.handler = IOHandler()
+        self.pattern = f"^.*{preext_pattern}.*{IMAGE_PATTERN}$" if preext_pattern is not None else IMAGE_PATTERN
+        self.handler = IOHandler(user=sharelink_id, password=sharelink_id)
         self.files = None
-
-    @property
-    def src(self) -> str:
-        return self.url
 
     def get_timelapse_spec(self) -> TimelapseSpec:
         """Downloads and analyzes the first frame to determine video constraints and extract master EXIF."""
-        files = self.handler.get_file_index(nmax=1, pattern=IMAGE_PATTERN)
-        local_file = self.handler.download(files[0])
+        if self.files is None:
+            raise RuntimeError("__iter__ called before __enter__")
+        local_file = self.handler.download(self.files[0])
         try:
             img = PIL.Image.open(local_file)
             raw_exif = img.info.get("exif")
@@ -177,8 +203,12 @@ class RemoteImageSource(BaseImageSource):
 
     def __enter__(self):
         self.handler.__enter__()
-        self.handler.cd(self.url)
-        self.files = self.handler.get_file_index(pattern=IMAGE_PATTERN)
+        self.handler.cd(self.src)
+        self.files = self.handler.get_file_index(pattern=self.pattern, nmax=self.n_max)
+        if not self.recursive:
+            self.files = [f for f in self.files if f.count("/") < 1]
+        if len(self.files) == 0:
+            raise ValueError(f"No files found matching pattern '{self.pattern}' in directory '{self.src}'.")
         self.files.sort(key=natural_sort_key)
         return self
 
@@ -372,9 +402,13 @@ def cli():
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("-q", "--quality", type=int, default=23)
     parser.add_argument("--preset", default="medium")
+    parser.add_argument("-r", "--recursive", action="store_true")
+    parser.add_argument("-n", "--n-max", type=int, default=None)
     parser.add_argument("-d", "--dry-run", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--remote", action="store_true")
+    parser.add_argument("--sharelink-id", type=int, default=None)
+    parser.add_argument("--preext-pattern", type=str, default=None)
     args, extra = parser.parse_known_args()
     return {**vars(args), **parse_unknown_arguments(extra)}
 
@@ -383,11 +417,27 @@ def main():
     args = cli()
     log_level = logging.DEBUG if args.get("verbose") else logging.INFO
     logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
-    src, output = args.pop("input"), args.pop("output")
+    input, output = args.pop("input"), args.pop("output")
+    src_spec = BaseImageSource.SourceSpec(
+        src=input,
+        n_max=args.pop("n_max", None),
+        recursive=args.pop("recursive", False),
+    )
     remote = args.pop("remote", False)
-    SourceCls = RemoteImageSource if remote else LocalImageSource
+    if not remote:
+        sharelink_id = args.pop("sharelink_id", None)
+        preext_pattern = args.pop("preext_pattern", None)
+        if sharelink_id is not None:
+            logger.warning(f"{sharelink_id=} is ignored for local sources")
+        if preext_pattern is not None:
+            logger.warning(f"{preext_pattern=} is ignored for local sources")
+        src = LocalImageSource(src_spec)
+    else:
+        sharelink_id = args.pop("sharelink_id", None)
+        preext_pattern = args.pop("preext_pattern", None)
+        src = RemoteImageSource(src_spec, sharelink_id=sharelink_id, preext_pattern=preext_pattern)
     compile_video(
-        source=SourceCls(src),
+        source=src,
         output=output,
         fps=args.pop("fps"),
         quality=args.pop("quality"),
