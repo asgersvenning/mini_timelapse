@@ -79,17 +79,24 @@ class LocalImageSource(BaseImageSource):
         raw_exif = img.info.get("exif")
         return TimelapseSpec(width=img.size[0], height=img.size[1], master_exif=raw_exif)
 
+    def _get_image_and_metadata(self, path: str):
+        img = PIL.Image.open(path)
+        meta = {"filename": os.path.basename(path)}
+
+        # Unified EXIF extraction
+        exif_data = extract_image_metadata(img)
+        if "time" in exif_data:
+            meta["time"] = exif_data["time"]
+
+        return np.array(img), meta
+
     def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
         for f in self.files:
-            img = PIL.Image.open(f)
-            meta = {"filename": os.path.basename(f)}
-
-            # Unified EXIF extraction
-            exif_data = extract_image_metadata(img)
-            if "time" in exif_data:
-                meta["time"] = exif_data["time"]
-
-            yield np.array(img), meta
+            try:
+                yield self._get_image_and_metadata(f)
+            except Exception as e:
+                logger.warning(f"Failed to open image {f}: {e}")
+                continue
 
     def __len__(self):
         return len(self.files)
@@ -126,6 +133,17 @@ class RemoteImageSource(BaseImageSource):
         finally:
             os.remove(local_file)
 
+    def _get_image_and_metadata(self, path: str):
+        img = PIL.Image.open(path)
+        meta = {"filename": os.path.basename(path), "source": "remote"}
+
+        # Unified EXIF extraction
+        exif_data = extract_image_metadata(img)
+        if "time" in exif_data:
+            meta["time"] = exif_data["time"]
+
+        return np.array(img), meta
+
     def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
         if RemotePathIterator is None:
             raise ImportError(
@@ -137,15 +155,11 @@ class RemoteImageSource(BaseImageSource):
         iterator = RemotePathIterator(io_handler=self.handler, clear_local=True)
         iterator.remote_paths = self.files
         for lf, rf in iterator:
-            img = PIL.Image.open(lf)
-            meta = {"filename": os.path.basename(lf), "source": "remote"}
-
-            # Unified EXIF extraction
-            exif_data = extract_image_metadata(img)
-            if "time" in exif_data:
-                meta["time"] = exif_data["time"]
-
-            yield np.array(img), meta
+            try:
+                yield self._get_image_and_metadata(lf)
+            except Exception as e:
+                logger.warning(f"Failed to open image {rf} ({lf}): {e}")
+                continue
 
     def __len__(self):
         if self.files is None:

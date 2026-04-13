@@ -21,10 +21,10 @@ class TimelapseVideo:
     with frame-accurate metadata recovery.
     """
 
-    def __init__(self, path: str, fps: float = 30.0):
+    def __init__(self, path: str, fps: float = 30.0, container_kwargs: dict | None = None):
         self.path = path
         self._fps = fps if fps is not None else 30.0
-        self._container = av.open(path)
+        self._container = av.open(path, **(container_kwargs or {}))
         self._video_stream = next((s for s in self._container.streams if s.type == "video"), None)
         if not self._video_stream:
             raise ValueError(f"No video stream found in {path}")
@@ -378,10 +378,13 @@ class VideoImageSource(BaseImageSource):
             master_exif=self.video.master_exif,
         )
 
+    def _get_image_and_metadata(self, idx: int):
+        return self.video.get_frame(idx)
+
     def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
         for idx in self.indices:
             try:
-                yield self.video.get_frame(idx)
+                yield self._get_image_and_metadata(idx)
             except Exception as e:
                 if self.skip_corrupted:
                     logger.warning(f"Skipping corrupted/missing frame {idx}: {e}")

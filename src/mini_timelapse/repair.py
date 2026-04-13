@@ -37,7 +37,7 @@ def repair_video(
         sys.exit(1)
 
     logger.info(f"Opening video for repair: {input_path}")
-    with TimelapseVideo(input_path, fps=fps) as video:
+    with TimelapseVideo(input_path, fps=fps, container_kwargs={"metadata_errors": "ignore"}) as video:
         num_frames = len(video)
 
         # --- Metadata Integrity Check ---

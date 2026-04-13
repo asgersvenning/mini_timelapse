@@ -101,6 +101,10 @@ class BaseImageSource(ABC):
         pass
 
     @abstractmethod
+    def _get_image_and_metadata(self, path: str):
+        raise NotImplementedError
+
+    @abstractmethod
     def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
         raise NotImplementedError
 

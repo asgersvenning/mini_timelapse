@@ -214,7 +214,7 @@ def test_repair_real_truncation():
         src_dir = os.path.join(tmp_dir, "src")
         video_full = os.path.join(tmp_dir, "full.mkv")
         video_repaired = os.path.join(tmp_dir, "repaired.mkv")
-        num_frames = 20  # Enough frames to ensure truncation hits the payload
+        num_frames = 1000  # Enough frames to ensure truncation hits the payload
         generate_test_images(src_dir, num_images=num_frames)
 
         # 1. Compile full video
@@ -226,7 +226,7 @@ def test_repair_real_truncation():
 
         # 2. Truncate (keep only 60% of bytes)
         with open(video_full, "rb") as f_in:
-            truncated_data = f_in.read(int(full_size * 0.6))
+            truncated_data = f_in.read(int(full_size * 0.5))
         with open(video_full, "wb") as f_out:
             f_out.write(truncated_data)
 
