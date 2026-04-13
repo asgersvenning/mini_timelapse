@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
-from datetime import datetime
 from fractions import Fraction
 
 import av
@@ -15,7 +14,7 @@ import PIL.Image
 from tqdm import tqdm
 
 from mini_timelapse.metadata import encode_metadata_payload, get_mkv_subtitle_header
-from mini_timelapse.utils import BaseImageSource, TimelapseSpec, natural_sort_key, normalize_cli_args
+from mini_timelapse.utils import BaseImageSource, TimelapseSpec, natural_sort_key, normalize_cli_args, parse_time
 
 try:
     from pyremotedata.implicit_mount import IOHandler, RemotePathIterator
@@ -44,15 +43,8 @@ def extract_image_metadata(img: PIL.Image.Image) -> dict:
 
     if dt_str:
         dt_str = str(dt_str).strip()
-        meta["time"] = dt_str  # Raw string format
-
-        # Attempt to parse into a datetime object
-        for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                meta["dt"] = datetime.strptime(dt_str, fmt)
-                break
-            except ValueError:
-                continue
+        meta["time"] = dt_str
+        meta["dt"] = parse_time(dt_str)
 
     return meta
 
@@ -300,7 +292,7 @@ def compile_video(
                 with open(master_exif_path, "wb") as f:
                     f.write(spec.master_exif)
 
-            logger.info("Mirroring metadata to Matroska attachments...")
+            logger.info("Mirroring metadata to Matroska attachments and optimizing for streaming...")
 
             ffmpeg_cmd = [
                 "ffmpeg",
@@ -311,6 +303,11 @@ def compile_video(
                 "-y",
                 "-i",
                 temp_video_path,
+                # CRITICAL ADDITION: Explicitly map all streams from input 0.
+                # Without this, FFmpeg might drop the subtitle stream if it gets
+                # confused by the attachments. This forces it to keep the Video + ASS.
+                "-map",
+                "0",
                 "-attach",
                 meta_json_path,
                 "-metadata:s:t:0",
@@ -331,8 +328,20 @@ def compile_video(
                     ]
                 )
 
-            # Write out to the atomic .part file
-            ffmpeg_cmd.extend(["-c", "copy", "-f", "matroska", final_part])
+            # Calculate dynamic index space (min 2MB, scales up for millions of frames)
+            index_kb = max(2048, int((len(source) / 1000) * 10))
+
+            ffmpeg_cmd.extend(
+                [
+                    "-c",
+                    "copy",
+                    "-f",
+                    "matroska",
+                    "-reserve_index_space",
+                    f"{index_kb}K",
+                    final_part,
+                ]
+            )
 
             try:
                 subprocess.run(ffmpeg_cmd, check=True)

@@ -2,14 +2,13 @@ import argparse
 import logging
 import os
 import tempfile
-from datetime import datetime
 
 import piexif
 from PIL import Image
 from tqdm import tqdm
 
 from mini_timelapse.reader import TimelapseVideo
-from mini_timelapse.utils import normalize_cli_args
+from mini_timelapse.utils import normalize_cli_args, parse_time
 
 try:
     from pyremotedata.implicit_mount import IOHandler
@@ -41,19 +40,12 @@ def _build_exif_bytes(meta: dict, master_exif: bytes = None) -> bytes:
     # Patch DateTimeOriginal
     if "time" in meta:
         dt_str = meta["time"]
-        dt = None
-        for fmt in ("%Y:%m:%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                dt = datetime.strptime(dt_str, fmt)
-                break
-            except ValueError:
-                continue
-        if dt:
-            exif_dt = dt.strftime("%Y:%m:%d %H:%M:%S").encode("utf-8")
-            # Update all standard EXIF time fields to ensure consistency
-            exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exif_dt
-            exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exif_dt
-            exif_dict["0th"][piexif.ImageIFD.DateTime] = exif_dt
+        dt = parse_time(dt_str)
+        exif_dt = dt.strftime("%Y:%m:%d %H:%M:%S").encode("utf-8")
+        # Update all standard EXIF time fields to ensure consistency
+        exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exif_dt
+        exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exif_dt
+        exif_dict["0th"][piexif.ImageIFD.DateTime] = exif_dt
 
     # Patch GPS coordinates (Using your existing Rational conversion logic)
     if "lat" in meta and "lon" in meta:

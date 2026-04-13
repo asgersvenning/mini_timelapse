@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from mini_timelapse.compile import compile_video
 from mini_timelapse.reader import TimelapseVideo, VideoImageSource
-from mini_timelapse.utils import normalize_cli_args
+from mini_timelapse.utils import normalize_cli_args, parse_time
 
 logger = logging.getLogger("timelapse-repair")
 
@@ -55,7 +55,7 @@ def repair_video(
                 if start_time:
                     try:
                         # ISO format usually: 2024-06-15T12:00:00.000000Z
-                        base_dt = video._parse_time(start_time.replace("T", " ").split(".")[0])
+                        base_dt = parse_time(start_time.replace("T", " ").split(".")[0])
                     except Exception:
                         base_dt = datetime.now()
                 else:
@@ -77,7 +77,7 @@ def repair_video(
 
         # --- Sorting ---
         # Sort valid indices by time
-        sorted_indices = sorted(valid_indices, key=lambda i: video._parse_time(video.metadata[i]["time"]))
+        sorted_indices = sorted(valid_indices, key=lambda i: parse_time(video.metadata[i]["time"]))
 
         if sorted_indices != list(range(num_frames)):
             logger.warning("Frames are out of order. Repair tool will re-order them.")

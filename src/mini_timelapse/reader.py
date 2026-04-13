@@ -10,7 +10,7 @@ import av
 import numpy as np
 
 from mini_timelapse.metadata import decode_metadata_payload
-from mini_timelapse.utils import BaseImageSource, TimelapseSpec
+from mini_timelapse.utils import BaseImageSource, TimelapseSpec, parse_time
 
 logger = logging.getLogger(__name__)
 
@@ -212,8 +212,11 @@ class TimelapseVideo:
             # Check if this frame is actually the one we wanted or later
             # (seek might land earlier)
             frame_idx = int(round(frame.pts * frame.time_base * self._fps))
-            if frame_idx >= index:
+            if frame_idx == index:
                 return frame.to_ndarray(format="rgb24"), self.metadata[index]
+            elif frame_idx > index:
+                logger.warning(f"Missed exact frame {index}, returning frame {frame_idx}")
+                return frame.to_ndarray(format="rgb24"), self.metadata[frame_idx]
 
         raise RuntimeError(f"Could not seek to frame {index}")
 
@@ -246,12 +249,9 @@ class TimelapseVideo:
     def close(self):
         self._container.close()
 
-    def _parse_time(self, time_str: str) -> datetime:
-        """Parses common EXIF and ISO time formats."""
-        try:
-            return datetime.strptime(time_str, "%Y:%m:%d %H:%M:%S")
-        except ValueError:
-            return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+    def __del__(self):
+        if hasattr(self, "_container") and self._container is not None:
+            self.close()
 
     def _binary_search(self, target_dt: datetime, valid_indices: list[int]) -> int | None:
         """
@@ -263,7 +263,7 @@ class TimelapseVideo:
         high = len(valid_indices) - 1
 
         def get_dt(idx_into_valid):
-            return self._parse_time(self.metadata[valid_indices[idx_into_valid]]["time"])
+            return parse_time(self.metadata[valid_indices[idx_into_valid]]["time"])
 
         while low <= high:
             mid = (low + high) // 2
@@ -297,19 +297,17 @@ class TimelapseVideo:
 
         return min(
             candidates,
-            key=lambda i: abs((self._parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
+            key=lambda i: abs((parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
         )
 
     def _linear_search(self, target_dt: datetime, valid_indices: list[int]) -> int:
         """Finds the closest matching index via linear scan."""
         return min(
             valid_indices,
-            key=lambda i: abs((self._parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
+            key=lambda i: abs((parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
         )
 
-    def get_frame_by_time(
-        self, target_time: str | datetime, max_diff: float | None = None
-    ) -> tuple[np.ndarray, dict, float]:
+    def get_frame_by_time(self, target_time: str | datetime, max_diff: float | None = None) -> tuple[np.ndarray, dict, float]:
         """
         Finds the frame closest to the target real-world datetime.
         Uses binary search for O(log N) lookups on sorted data,
@@ -323,7 +321,7 @@ class TimelapseVideo:
             A tuple of (frame, metadata, time_diff_seconds).
         """
         if isinstance(target_time, str):
-            target_dt = self._parse_time(target_time)
+            target_dt = parse_time(target_time)
         else:
             target_dt = target_time
 
@@ -338,7 +336,7 @@ class TimelapseVideo:
             logger.warning("Non-monotonic timestamps detected; falling back to linear search.")
             best_idx = self._linear_search(target_dt, valid_indices)
 
-        match_dt = self._parse_time(self.metadata[best_idx]["time"])
+        match_dt = parse_time(self.metadata[best_idx]["time"])
         time_diff = abs((match_dt - target_dt).total_seconds())
 
         if max_diff is not None and time_diff > max_diff:

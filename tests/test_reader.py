@@ -7,6 +7,7 @@ from pathlib import Path
 
 from mini_timelapse.compile import LocalImageSource, compile_video
 from mini_timelapse.reader import TimelapseVideo
+from mini_timelapse.utils import parse_time
 
 # Add project root and tests to sys.path
 project_root = Path(__file__).resolve().parent.parent
@@ -119,7 +120,7 @@ def test_reader_functionality():
             print("✓ get_frame_by_time passed (exact match)")
 
             # Test closest match
-            dt_base = tv._parse_time(actual_time_str)
+            dt_base = parse_time(actual_time_str)
             dt_offset = dt_base + timedelta(seconds=5)
             frame, meta, diff = tv.get_frame_by_time(dt_offset)
             # Since generate_test_images uses ~10min gaps, 123 should still be closest
@@ -153,7 +154,7 @@ def test_reader_functionality():
 
             def test_search(ti):
                 # Exact match
-                tt = tv._parse_time(tv.metadata[ti]["time"])
+                tt = parse_time(tv.metadata[ti]["time"])
                 assert tv._binary_search(tt, valid_indices) == ti
                 assert tv._linear_search(tt, valid_indices) == ti
 
@@ -168,12 +169,12 @@ def test_reader_functionality():
             print("✓ Private search methods passed (all frames)")
 
             # Out of bounds (before)
-            t_before = tv._parse_time(tv.metadata[0]["time"]) - timedelta(days=1)
+            t_before = parse_time(tv.metadata[0]["time"]) - timedelta(days=1)
             assert tv._binary_search(t_before, valid_indices) == 0
             assert tv._linear_search(t_before, valid_indices) == 0
 
             # Out of bounds (after)
-            t_after = tv._parse_time(tv.metadata[num_frames - 1]["time"]) + timedelta(days=1)
+            t_after = parse_time(tv.metadata[num_frames - 1]["time"]) + timedelta(days=1)
             assert tv._binary_search(t_after, valid_indices) == num_frames - 1
             assert tv._linear_search(t_after, valid_indices) == num_frames - 1
             print("✓ Private search methods passed (out of bounds)")
@@ -184,8 +185,8 @@ def test_reader_functionality():
                 # Swap first and last entries to break monotonicity
                 tv.metadata[0], tv.metadata[num_frames - 1] = tv.metadata[num_frames - 1], tv.metadata[0]
                 # binary search should return None, linear should still work
-                assert tv._binary_search(tv._parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) is None
-                assert tv._linear_search(tv._parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) == num_frames // 2
+                assert tv._binary_search(parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) is None
+                assert tv._linear_search(parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) == num_frames // 2
                 print("✓ Private search fallback passed")
             finally:
                 tv.metadata = orig_meta

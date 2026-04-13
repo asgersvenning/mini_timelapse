@@ -1,9 +1,41 @@
 import re
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 
 import numpy as np
+
+_DEFAULT_FORMATS = [
+    "%Y:%m:%d %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S.%fZ",
+]
+
+# Thread-local storage container
+_thread_local = threading.local()
+
+
+def parse_time(time_str: str) -> datetime:
+    # 1. Initialize the private list for this specific thread if it doesn't exist yet
+    if not hasattr(_thread_local, "formats"):
+        _thread_local.formats = list(_DEFAULT_FORMATS)
+
+    formats = _thread_local.formats
+
+    # 2. Parse and mutate the thread's private list (100% thread-safe, no locks)
+    for i, fmt in enumerate(formats):
+        try:
+            dt = datetime.strptime(time_str, fmt)
+            if i > 0:
+                formats.insert(0, formats.pop(i))
+            return dt
+        except ValueError:
+            continue
+
+    raise ValueError(f"Time data '{time_str}' does not match any known format.")
 
 
 def natural_sort_key(s: str):

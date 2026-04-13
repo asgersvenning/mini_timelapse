@@ -1,8 +1,6 @@
 import os
 import shutil
-import sys
 import tempfile
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,7 +8,12 @@ import pytest
 from mini_timelapse.compile import LocalImageSource, compile_video
 from mini_timelapse.reader import TimelapseVideo
 from mini_timelapse.repair import repair_video
-from tests.gen_test_images import generate_test_images
+from mini_timelapse.utils import parse_time
+
+try:
+    from tests.gen_test_images import generate_test_images
+except ImportError:
+    from gen_test_images import generate_test_images
 
 
 def test_repair_sorting():
@@ -29,13 +32,13 @@ def test_repair_sorting():
             compile_video(source, video_bad, fps=30)
 
         with TimelapseVideo(video_bad) as tv:
-            times = [tv._parse_time(m["time"]) for m in tv.metadata]
+            times = [parse_time(m["time"]) for m in tv.metadata]
             assert times[0] > times[-1]
 
         repair_video(input_path=video_bad, output_path=video_good, fps=30)
 
         with TimelapseVideo(video_good) as tv:
-            times = [tv._parse_time(m["time"]) for m in tv.metadata]
+            times = [parse_time(m["time"]) for m in tv.metadata]
             assert times[0] < times[-1]
             assert len(tv) == num_frames
     finally:
@@ -50,13 +53,27 @@ def test_repair_infer_metadata():
         video_no_meta = os.path.join(tmp_dir, "nometa.mkv")
         video_repaired = os.path.join(tmp_dir, "repaired.mkv")
         generate_test_images(src_dir, num_images=5)
-        
+
         # Create a video WITHOUT metadata
         import subprocess
-        subprocess.run([
-            "ffmpeg", "-y", "-nostdin", "-pattern_type", "glob", "-i", os.path.join(src_dir, "*.jpg"),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", video_no_meta
-        ], capture_output=True)
+
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-nostdin",
+                "-pattern_type",
+                "glob",
+                "-i",
+                os.path.join(src_dir, "*.jpg"),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                video_no_meta,
+            ],
+            capture_output=True,
+        )
 
         # Should fail without infer
         with patch("sys.exit", side_effect=SystemExit) as mock_exit:
@@ -82,11 +99,11 @@ def test_repair_normal():
         video_in = os.path.join(tmp_dir, "in.mkv")
         video_out = os.path.join(tmp_dir, "out.mkv")
         generate_test_images(src_dir, num_images=5)
-        
+
         src_spec = LocalImageSource.SourceSpec(src=src_dir)
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_in, fps=30)
-            
+
         repair_video(video_in, video_out, fps=30)
         assert os.path.exists(video_out)
         with TimelapseVideo(video_out) as tv:
@@ -104,7 +121,7 @@ def test_repair_partial_metadata():
         video_out = os.path.join(tmp_dir, "out.mkv")
         num_frames = 5
         generate_test_images(src_dir, num_images=num_frames)
-        
+
         src_spec = LocalImageSource.SourceSpec(src=src_dir)
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_in, fps=30)
@@ -120,12 +137,11 @@ def test_repair_partial_metadata():
             mock_video._fps = 30.0
             mock_video.width = 320
             mock_video.height = 240
-            
+
             # Partial metadata: frame 3 has no 'time'
             meta = [{"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)]
             del meta[3]["time"]
             mock_video.metadata = meta
-            mock_video._parse_time.side_effect = lambda t: datetime.strptime(t, "%Y:%m:%d %H:%M:%S")
             mock_class.return_value = mock_video
 
             # Fail without skip_corrupted
@@ -139,7 +155,7 @@ def test_repair_partial_metadata():
                 repair_video(video_in, video_out, skip_corrupted=True)
                 mock_compile.assert_called_once()
                 source = mock_compile.call_args.kwargs["source"]
-                assert len(source) == 4 # One frame skipped
+                assert len(source) == 4  # One frame skipped
 
     finally:
         shutil.rmtree(tmp_dir)
@@ -154,7 +170,7 @@ def test_repair_corrupted_frames():
         video_out = os.path.join(tmp_dir, "out.mkv")
         num_frames = 5
         generate_test_images(src_dir, num_images=num_frames)
-        
+
         src_spec = LocalImageSource.SourceSpec(src=src_dir)
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_in, fps=30)
@@ -168,13 +184,13 @@ def test_repair_corrupted_frames():
             mock_video.__len__.return_value = num_frames
             mock_video.metadata = [{"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)]
             mock_video.metadata_sources = {"attachment", "subtitle"}
-            mock_video._parse_time.side_effect = lambda t: datetime.strptime(t, "%Y:%m:%d %H:%M:%S")
-            
+
             # Frame 4 is "corrupted" (decode error)
             def get_frame_mock(idx):
                 if idx == 4:
                     raise RuntimeError("Decode error")
                 return (MagicMock(), mock_video.metadata[idx])
+
             mock_video.get_frame.side_effect = get_frame_mock
             mock_class.return_value = mock_video
 
@@ -198,25 +214,25 @@ def test_repair_real_truncation():
         src_dir = os.path.join(tmp_dir, "src")
         video_full = os.path.join(tmp_dir, "full.mkv")
         video_repaired = os.path.join(tmp_dir, "repaired.mkv")
-        num_frames = 20 # Enough frames to ensure truncation hits the payload
+        num_frames = 20  # Enough frames to ensure truncation hits the payload
         generate_test_images(src_dir, num_images=num_frames)
 
         # 1. Compile full video
         src_spec = LocalImageSource.SourceSpec(src=src_dir)
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_full, fps=30)
-            
+
         full_size = os.path.getsize(video_full)
-        
+
         # 2. Truncate (keep only 60% of bytes)
         with open(video_full, "rb") as f_in:
             truncated_data = f_in.read(int(full_size * 0.6))
         with open(video_full, "wb") as f_out:
             f_out.write(truncated_data)
-            
+
         # 3. Repair with skip_corrupted=True
         repair_video(video_full, video_repaired, skip_corrupted=True, fps=30)
-        
+
         # 4. Verify repaired output
         assert os.path.exists(video_repaired)
         with TimelapseVideo(video_repaired) as tv:
@@ -243,15 +259,15 @@ def test_repair_real_corruption():
         src_spec = LocalImageSource.SourceSpec(src=src_dir)
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_orig, fps=30)
-            
+
         # 2. Corrupt a chunk in the middle (avoiding header)
         with open(video_orig, "r+b") as f:
             f.seek(int(os.path.getsize(video_orig) * 0.5))
-            f.write(b"\xFF" * 1024) # Overwrite 1KB of data with garbage
-            
+            f.write(b"\xff" * 1024)  # Overwrite 1KB of data with garbage
+
         # 3. Repair with skip_corrupted=True
         repair_video(video_orig, video_repaired, skip_corrupted=True, fps=30)
-        
+
         # 4. Verify repaired output
         assert os.path.exists(video_repaired)
         with TimelapseVideo(video_repaired) as tv:
