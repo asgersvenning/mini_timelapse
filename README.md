@@ -226,6 +226,7 @@ decompile_video(
 | `--preset` | x264 speed preset | `medium` |
 | `--skip-corrupted` | Skip frames that cannot be decoded or have missing metadata | |
 | `--infer-metadata` | Deduce timestamps from video creation time if missing | |
+| `-f`, `--force` | Skip interactive confirmation | |
 | `-v`, `--verbose` | Enable debug logging | |
 
 ## Architecture Details

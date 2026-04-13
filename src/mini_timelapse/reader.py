@@ -23,7 +23,7 @@ class TimelapseVideo:
 
     def __init__(self, path: str, fps: float = 30.0):
         self.path = path
-        self._fps = fps
+        self._fps = fps if fps is not None else 30.0
         self._container = av.open(path)
         self._video_stream = next((s for s in self._container.streams if s.type == "video"), None)
         if not self._video_stream:
@@ -35,10 +35,10 @@ class TimelapseVideo:
         if self.length == 0:
             # Fallback for some containers: use duration from stream or container
             if self._video_stream.duration is not None:
-                self.length = int(round(float(self._video_stream.duration * self._video_stream.time_base) * fps))
+                self.length = int(round(float(self._video_stream.duration * self._video_stream.time_base) * self._fps))
             elif self._container.duration is not None:
                 # container.duration is in av.time_base (microseconds)
-                self.length = int(round(float(self._container.duration / av.time_base) * fps))
+                self.length = int(round(float(self._container.duration / av.time_base) * self._fps))
             else:
                 self.length = 0
 
