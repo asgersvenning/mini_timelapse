@@ -36,12 +36,26 @@ def repair_video(
         logger.error(f"Input file not found: {input_path}")
         sys.exit(1)
 
+    metadata_sources = set()
+
     logger.info(f"Opening video for repair: {input_path}")
     with TimelapseVideo(input_path, fps=fps, container_kwargs={"metadata_errors": "ignore"}) as video:
         num_frames = len(video)
 
         # --- Metadata Integrity Check ---
-        valid_indices = [i for i, m in enumerate(video.metadata) if "time" in m]
+        valid_indices = [i for i, m in video.metadata.items() if "time" in m]
+        if len(valid_indices) == num_frames:
+            metadata_sources.add("attachment")
+
+        # Check if we can extract metadata from subtitles
+        subtitle_indices = []
+        for i in range(num_frames):
+            submeta = video._get_metadata(i, force_subtitle=True)
+            if submeta and "time" in submeta:
+                subtitle_indices.append(i)
+
+        if subtitle_indices and len(subtitle_indices) == num_frames:
+            metadata_sources.add("subtitle")
 
         if not valid_indices:
             if not infer_metadata:
@@ -64,15 +78,17 @@ def repair_video(
                 logger.info(f"Inferring start time: {base_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 for i in range(num_frames):
                     dt = base_dt + timedelta(seconds=i / (fps or 30))
+                    if i not in video.metadata:
+                        video.metadata[i] = {}
                     video.metadata[i]["time"] = dt.strftime("%Y:%m:%d %H:%M:%S")
                     video.metadata[i]["index"] = i
                 valid_indices = list(range(num_frames))
 
         # --- Redundancy check ---
-        if "attachment" not in video.metadata_sources and "subtitle" not in video.metadata_sources:
+        if "attachment" not in metadata_sources and "subtitle" not in metadata_sources:
             logger.warning("Metadata recovery relied solely on raw demuxing; reliability may be limited.")
-        elif len(video.metadata_sources) < 2:
-            source = list(video.metadata_sources)[0]
+        elif len(metadata_sources) < 2:
+            source = list(metadata_sources)[0]
             logger.warning(f"Only one metadata source found ({source}). Redundancy layer is missing.")
 
         # --- Sorting ---

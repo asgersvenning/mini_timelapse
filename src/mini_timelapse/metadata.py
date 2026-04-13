@@ -40,54 +40,62 @@ def format_ass_time(seconds: float) -> str:
 def encode_metadata_payload(index: int, meta: dict, fps: float = 30.0) -> bytes:
     """
     Formats a JSON dictionary into a strictly compliant MKV ASS event block.
+    Uses a Dual-Layer payload (Visible HUD + Hidden Base64).
     """
     json_str = json.dumps(meta, separators=(",", ":"))
-
-    start_time = index / fps
-    end_time = (index + 1) / fps
-    ts_start = format_ass_time(start_time)
-    ts_end = format_ass_time(end_time)
-
-    # Visible metadata prefix for HUD in players
-    prefix = f"Timestamp: {meta.get('time', 'N/A')} | File: {meta.get('filename', 'N/A')} | "
-
-    # Base64 encode the JSON to prevent ASS formatting tag interpretation (e.g., braces)
     json_b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
 
-    # Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text (10 fields)
-    payload = f"0,{ts_start},{ts_end},Default,,0,0,0,,{prefix}###METADATA_START###{json_b64}###METADATA_END###"
+    # 1. VISIBLE HUD LAYER
+    hud_lines = [f"Time: {meta.get('time', 'N/A')}", f"File: {meta.get('filename', 'N/A')}"]
+    if "lat" in meta and "lon" in meta:
+        hud_lines.append(f"GPS: {meta['lat']}, {meta['lon']}")
+
+    # Anchor the HUD to the Top-Left corner using ASS override tags {\an7}
+    # This keeps the text out of the center of your scientific imagery
+    visible_hud = r"{\an7}" + r"\N".join(hud_lines)
+
+    # 2. INVISIBLE MACHINE LAYER
+    invisible_payload = f"{{_meta:{json_b64}}}"
+
+    text_payload = f"{visible_hud}{invisible_payload}"
+
+    # MKV AV_CODEC_ID_ASS Format:
+    # ReadOrder, Layer, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+    # We use your frame 'index' as the ReadOrder to guarantee sequential rendering
+    payload = f"{index},0,Default,,0,0,0,,{text_payload}"
+
     return payload.encode("utf-8")
 
 
 def decode_metadata_payload(data: bytes | str) -> list[dict]:
     """
     Decodes one or more JSON metadata payloads from a subtitle event.
-    Extremely robust: handles raw bytes, ASS lines, and merged content via regex.
+    Backwards compatible with the legacy ###METADATA_START### markers.
     """
     if isinstance(data, bytes):
         text = data.decode("utf-8", errors="ignore")
     else:
         text = data
 
-    # Use regex to find all matches between the markers
-    pattern = r"###METADATA_START###(.*?)###METADATA_END###"
-    matches = re.findall(pattern, text)
-
     results = []
-    for match in matches:
+
+    # 1. Look for the new ASS-hidden format first: {_meta:BASE64}
+    hidden_matches = re.findall(r"\{_meta:(.*?)\}", text)
+
+    # 2. Look for the legacy format: ###METADATA_START###BASE64###METADATA_END###
+    legacy_matches = re.findall(r"###METADATA_START###(.*?)###METADATA_END###", text)
+
+    for match in hidden_matches + legacy_matches:
         match = match.strip()
         try:
-            # Try Base64 first (new format)
+            # Decode Base64 (Both new and legacy formats use this)
+            decoded = base64.b64decode(match).decode("utf-8")
+            results.append(json.loads(decoded))
+        except (ValueError, binascii.Error, json.JSONDecodeError):
+            # Fallback in case a legacy marker contained raw unencoded JSON
             try:
-                decoded = base64.b64decode(match).decode("utf-8")
-                results.append(json.loads(decoded))
-                continue
-            except (ValueError, binascii.Error) if "binascii" in globals() else Exception:
-                pass
-
-            # Fallback to raw JSON (old format)
-            results.append(json.loads(match))
-        except json.JSONDecodeError:
-            pass
+                results.append(json.loads(match))
+            except json.JSONDecodeError:
+                logger.debug("Failed to decode a matched metadata block.")
 
     return results

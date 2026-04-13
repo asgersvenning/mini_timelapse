@@ -17,7 +17,7 @@ def _to_deg(value, loc):
     return ((d, 1), (m, 1), (s, 100))
 
 
-def generate_test_images(dst_dir: str, num_images: int = 10, size: tuple[int, int] = (320, 240)) -> list[dict]:
+def generate_test_images(dst_dir: str, num_images: int = 10, size: tuple[int, int] = (320, 240)) -> dict[int, dict]:
     os.makedirs(dst_dir, exist_ok=True)
     dt_curr = datetime(2023, 1, 1, 12, 0, 0)
 
@@ -87,7 +87,7 @@ def generate_test_images(dst_dir: str, num_images: int = 10, size: tuple[int, in
         )
 
     expected.sort(key=lambda x: natural_sort_key(x["path"]))
-    return expected
+    return {i: v for i, v in enumerate(expected)}
 
 
 if __name__ == "__main__":

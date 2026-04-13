@@ -32,13 +32,13 @@ def test_repair_sorting():
             compile_video(source, video_bad, fps=30)
 
         with TimelapseVideo(video_bad) as tv:
-            times = [parse_time(m["time"]) for m in tv.metadata]
+            times = [parse_time(m["time"]) for m in tv.metadata.values()]
             assert times[0] > times[-1]
 
         repair_video(input_path=video_bad, output_path=video_good, fps=30)
 
         with TimelapseVideo(video_good) as tv:
-            times = [parse_time(m["time"]) for m in tv.metadata]
+            times = [parse_time(m["time"]) for m in tv.metadata.values()]
             assert times[0] < times[-1]
             assert len(tv) == num_frames
     finally:
@@ -139,7 +139,7 @@ def test_repair_partial_metadata():
             mock_video.height = 240
 
             # Partial metadata: frame 3 has no 'time'
-            meta = [{"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)]
+            meta = {i: {"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)}
             del meta[3]["time"]
             mock_video.metadata = meta
             mock_class.return_value = mock_video
@@ -182,7 +182,7 @@ def test_repair_corrupted_frames():
             mock_video.path = video_in
             mock_video.length = num_frames
             mock_video.__len__.return_value = num_frames
-            mock_video.metadata = [{"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)]
+            mock_video.metadata = {i: {"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)}
             mock_video.metadata_sources = {"attachment", "subtitle"}
 
             # Frame 4 is "corrupted" (decode error)

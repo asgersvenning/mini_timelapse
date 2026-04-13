@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class TimelapseVideo:
     """
     A high-level interface for reading and decompiling timelapse videos
-    with frame-accurate metadata recovery.
+    with frame-accurate metadata recovery via Just-In-Time (JIT) extraction.
     """
 
     def __init__(self, path: str, fps: float = 30.0, container_kwargs: dict | None = None):
@@ -32,36 +32,25 @@ class TimelapseVideo:
         self.width = self._video_stream.width
         self.height = self._video_stream.height
         self.length = self._video_stream.frames
+
         if self.length == 0:
-            # Fallback for some containers: use duration from stream or container
             if self._video_stream.duration is not None:
                 self.length = int(round(float(self._video_stream.duration * self._video_stream.time_base) * self._fps))
             elif self._container.duration is not None:
-                # container.duration is in av.time_base (microseconds)
                 self.length = int(round(float(self._container.duration / av.time_base) * self._fps))
             else:
                 self.length = 0
 
-        # Extraction stats
-        self.metadata_sources = set()
-
-        # Extract metadata
-        self.metadata = self._extract_metadata()
+        # Attempt to load the sovereign attachment upfront (Instant / O(1))
+        # If it fails, self.metadata is initialized with empty dicts for JIT fallback.
+        self.metadata = self._extract_sovereign_metadata()
 
     def __len__(self):
         return self.length
 
-    def _extract_metadata(self) -> list[dict]:
-        """
-        Extracts metadata using the most reliable source available:
-        1. Sovereign Backbone: Matroska JSON attachment (added via post-process)
-        2. Visible Stream: FFmpeg SRT parsing (fallback)
-        3. Raw Decoder: PyAV demuxing (safety fallback)
-        """
-        metadata_dict = {}
-        unique_indices = set()
-
-        # 1. SOVEREIGN PATH: Matroska Attachment (Atomic & 100% Reliable)
+    def _extract_sovereign_metadata(self):
+        """Attempts to load the Matroska JSON attachment instantly."""
+        metadata = dict()
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_json = os.path.join(tmp_dir, "extracted_meta.json")
@@ -80,8 +69,8 @@ class TimelapseVideo:
                     "null",
                     "-",
                 ]
-                # Run with timeout to prevent hangs
-                subprocess.run(cmd, timeout=10, check=True, capture_output=True)
+                logger.debug(f"Extracting metadata from {self.path}, this may take a while for large files")
+                subprocess.run(cmd, timeout=None, check=True, capture_output=True)
 
                 if os.path.exists(tmp_json):
                     with open(tmp_json) as f:
@@ -89,83 +78,51 @@ class TimelapseVideo:
 
                     if isinstance(attachment_data, list):
                         logger.info(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
-                        self.metadata_sources.add("attachment")
                         for item in attachment_data:
-                            if "index" in item:
-                                metadata_dict[int(item["index"])] = item
-                                unique_indices.add(int(item["index"]))
+                            if "index" in item and 0 <= int(item["index"]) < self.length:
+                                metadata[int(item["index"])] = item
         except Exception as e:
-            logger.debug(f"Attachment extraction skipped or failed: {e}")
+            logger.debug(f"Attachment extraction missing or failed, defaulting to JIT subtitle reading: {e}")
 
-        # 2. LEGACY PATH: FFmpeg CLI SRT Parsing
-        if len(unique_indices) < self.length:
-            sub_stream = next((s for s in self._container.streams if s.type == "subtitle"), None)
-            if sub_stream:
-                try:
-                    cmd = [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel",
-                        "error",
-                        "-nostdin",
-                        "-i",
-                        self.path,
-                        "-map",
-                        f"0:{sub_stream.index}",
-                        "-f",
-                        "srt",
-                        "-",
-                    ]
-                    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    stdout, _ = process.communicate()
-
-                    if process.returncode == 0:
-                        srt_text = stdout.decode("utf-8", errors="ignore")
-                        meta_items = decode_metadata_payload(srt_text)
-                        if meta_items:
-                            self.metadata_sources.add("subtitle")
-                        for item in meta_items:
-                            if "index" in item:
-                                idx = int(item["index"])
-                                if idx not in metadata_dict:
-                                    metadata_dict[idx] = item
-                                    unique_indices.add(idx)
-                except Exception as e:
-                    logger.debug(f"FFmpeg CLI extraction fallback failed: {e}")
-
-        # 3. SAFETY FALLBACK: PyAV Demux
-        if len(unique_indices) < self.length:
-            sub_stream = next((s for s in self._container.streams if s.type == "subtitle"), None)
-            if sub_stream:
-                self._container.seek(0)
-                for packet in self._container.demux(sub_stream):
-                    self.metadata_sources.add("demux")
-                    try:
-                        for subtitle in packet.decode():
-                            for rect in getattr(subtitle, "rects", []):
-                                text_data = getattr(rect, "ass", "") or getattr(rect, "text", "")
-                                if text_data:
-                                    for item in decode_metadata_payload(text_data):
-                                        idx = int(item.get("index", -1))
-                                        if idx != -1 and idx not in metadata_dict:
-                                            metadata_dict[idx] = item
-                                            unique_indices.add(idx)
-                    except Exception:
-                        pass
-                    for item in decode_metadata_payload(bytes(packet)):
-                        idx = int(item.get("index", -1))
-                        if idx != -1 and idx not in metadata_dict:
-                            metadata_dict[idx] = item
-                            unique_indices.add(idx)
-
-        # Map to dense list
-        metadata = [{} for _ in range(self.length)]
-        for idx, item in metadata_dict.items():
-            if 0 <= idx < self.length:
-                metadata[idx] = item
-
-        logger.info(f"Metadata Integrity: {len(unique_indices)}/{self.length} frames synchronized.")
         return metadata
+
+    def _get_metadata(self, index: int, force_subtitle: bool = False) -> dict:
+        """
+        JIT (Just-In-Time) Lazy Loader for metadata.
+        If the attachment failed, it seeks the subtitle stream exactly to the target frame.
+        """
+        if not force_subtitle and index in self.metadata:
+            return self.metadata[index]
+
+        sub_stream = next((s for s in self._container.streams if s.type == "subtitle"), None)
+        if not sub_stream:
+            return {}
+
+        pts = int(round(index * 1000 / self._fps))
+        try:
+            self._container.seek(pts, stream=sub_stream)
+        except Exception as e:
+            logger.debug(f"Failed to seek subtitle stream for metadata: {e}")
+            return {}
+
+        for packet in self._container.demux(sub_stream):
+            if packet.pts is None:
+                continue
+
+            packet_idx = int(round(packet.pts * packet.time_base * self._fps))
+            if packet_idx == index:
+                text_data = bytes(packet).decode("utf-8", errors="ignore")
+                items = decode_metadata_payload(text_data)
+
+                if items:
+                    self.metadata[index] = items[0]
+                    return items[0]
+            elif packet_idx > index:
+                break
+
+        if not force_subtitle:
+            self.metadata[index] = {}
+        return {}
 
     @property
     def master_exif(self) -> bytes | None:
@@ -181,14 +138,14 @@ class TimelapseVideo:
                     "-nostdin",
                     "-y",
                     "-dump_attachment:t",
-                    tmp_exif,  # Extracts all attachments, we just read the EXIF one
+                    tmp_exif,
                     "-i",
                     self.path,
                     "-f",
                     "null",
                     "-",
                 ]
-                subprocess.run(cmd, timeout=10, capture_output=True)
+                subprocess.run(cmd, timeout=None, capture_output=True)
 
                 if os.path.exists(tmp_exif):
                     with open(tmp_exif, "rb") as f:
@@ -205,23 +162,26 @@ class TimelapseVideo:
         if index < 0 or index >= self.length:
             raise IndexError(f"Frame index {index} out of bounds (0-{self.length - 1})")
 
+        # 1. Fetch metadata lazily
+        meta = self._get_metadata(index)
+
+        # 2. Fetch video frame
         pts = int(round(index * 1000 / self._fps))
         self._container.seek(pts, stream=self._video_stream)
 
         for frame in self._container.decode(self._video_stream):
-            # Check if this frame is actually the one we wanted or later
-            # (seek might land earlier)
             frame_idx = int(round(frame.pts * frame.time_base * self._fps))
             if frame_idx == index:
-                return frame.to_ndarray(format="rgb24"), self.metadata[index]
+                return frame.to_ndarray(format="rgb24"), meta
             elif frame_idx > index:
                 logger.warning(f"Missed exact frame {index}, returning frame {frame_idx}")
-                return frame.to_ndarray(format="rgb24"), self.metadata[frame_idx]
+                # Lazy-load the missed frame's metadata to prevent silent misalignment
+                missed_meta = self._get_metadata(frame_idx)
+                return frame.to_ndarray(format="rgb24"), missed_meta
 
         raise RuntimeError(f"Could not seek to frame {index}")
 
     def __getitem__(self, key: int | slice):
-        """Supports indexing and slicing of video frames."""
         if isinstance(key, int):
             return self.get_frame(key)
         elif isinstance(key, slice):
@@ -231,13 +191,12 @@ class TimelapseVideo:
             raise TypeError(f"Invalid argument type: {type(key)}")
 
     def __iter__(self):
-        """Iterates through all frames in the video."""
         self._container.seek(0)
         idx = 0
         for frame in self._container.decode(self._video_stream):
             if idx >= self.length:
                 break
-            yield frame.to_ndarray(format="rgb24"), self.metadata[idx]
+            yield frame.to_ndarray(format="rgb24"), self._get_metadata(idx)
             idx += 1
 
     def __enter__(self):
@@ -254,16 +213,14 @@ class TimelapseVideo:
             self.close()
 
     def _binary_search(self, target_dt: datetime, valid_indices: list[int]) -> int | None:
-        """
-        Performs binary search on valid indices.
-        Returns the closest matching index into self.metadata,
-        or None if a monotonicity violation is detected.
-        """
         low = 0
         high = len(valid_indices) - 1
 
         def get_dt(idx_into_valid):
-            return parse_time(self.metadata[valid_indices[idx_into_valid]]["time"])
+            meta = self._get_metadata(valid_indices[idx_into_valid])
+            if "time" not in meta:
+                raise ValueError(f"No time data at frame {valid_indices[idx_into_valid]}")
+            return parse_time(meta["time"])
 
         while low <= high:
             mid = (low + high) // 2
@@ -285,7 +242,6 @@ class TimelapseVideo:
             else:
                 return valid_indices[mid]
 
-        # Binary search finished without exact match; check neighbors
         candidates = []
         if 0 <= low < len(valid_indices):
             candidates.append(valid_indices[low])
@@ -295,40 +251,30 @@ class TimelapseVideo:
         if not candidates:
             return None
 
+        # Return candidate closest to target time
         return min(
             candidates,
-            key=lambda i: abs((parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
+            key=lambda i: abs((parse_time(self._get_metadata(i)["time"]) - target_dt).total_seconds()),
         )
 
     def _linear_search(self, target_dt: datetime, valid_indices: list[int]) -> int:
-        """Finds the closest matching index via linear scan."""
-        return min(
-            valid_indices,
-            key=lambda i: abs((parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
-        )
+        # Fallback linearly checks all given indices.
+        def diff(i):
+            meta = self._get_metadata(i)
+            if "time" not in meta:
+                return float("inf")
+            return abs((parse_time(meta["time"]) - target_dt).total_seconds())
+
+        return min(valid_indices, key=diff)
 
     def get_frame_by_time(self, target_time: str | datetime, max_diff: float | None = None) -> tuple[np.ndarray, dict, float]:
-        """
-        Finds the frame closest to the target real-world datetime.
-        Uses binary search for O(log N) lookups on sorted data,
-        with automatic fallback to linear search if non-monotonicity is detected.
-
-        Args:
-            target_time: The datetime to search for (string or datetime object).
-            max_diff: Maximum allowed difference in seconds. Raises ValueError if exceeded.
-
-        Returns:
-            A tuple of (frame, metadata, time_diff_seconds).
-        """
         if isinstance(target_time, str):
             target_dt = parse_time(target_time)
         else:
             target_dt = target_time
 
-        # Filter indices with a valid 'time' field
-        valid_indices = [i for i, meta in enumerate(self.metadata) if "time" in meta]
-        if not valid_indices:
-            raise ValueError("No frames with time metadata found in video.")
+        # Assume all frame indices are valid candidates for search
+        valid_indices = list(range(self.length))
 
         best_idx = self._binary_search(target_dt, valid_indices)
 
@@ -336,7 +282,11 @@ class TimelapseVideo:
             logger.warning("Non-monotonic timestamps detected; falling back to linear search.")
             best_idx = self._linear_search(target_dt, valid_indices)
 
-        match_dt = parse_time(self.metadata[best_idx]["time"])
+        match_meta = self._get_metadata(best_idx)
+        if "time" not in match_meta:
+            raise ValueError("Closest frame found lacks time metadata.")
+
+        match_dt = parse_time(match_meta["time"])
         time_diff = abs((match_dt - target_dt).total_seconds())
 
         if max_diff is not None and time_diff > max_diff:

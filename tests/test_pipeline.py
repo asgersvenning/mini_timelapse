@@ -13,6 +13,7 @@ Usage:
 If no image_dir is given, creates synthetic test images.
 """
 
+from mini_timelapse.metadata import decode_metadata_payload
 import base64
 import json
 import os
@@ -67,12 +68,12 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
                 it_src_dir = os.path.join(tmp_root, "src")
                 src_spec = LocalImageSource.SourceSpec(src=it_src_dir)
                 expected_meta = generate_test_images(it_src_dir, num_images=10000)
-                src_images = [e["path"] for e in expected_meta]
+                src_images = [e["path"] for e in expected_meta.values()]
             else:
                 src_spec = LocalImageSource.SourceSpec(src=src_dir)
                 with LocalImageSource(spec=src_spec) as source:
                     src_images = source.paths
-                    expected_meta = []
+                    expected_meta = {}
                     for path in src_images:
                         meta = get_exif_data(path)
                         if "dt" in meta:
@@ -207,31 +208,10 @@ def verify_roundtrip(src_dir: str = None, min_psnr: float = 25.0, iterations: in
             with open(srt_path, encoding="utf-8") as f:
                 srt_content = f.read()
 
-                # Verify that EVERY metadata index is present in the SRT
-                # OPTIMIZATION: Pre-parse all indices once to avoid O(N^2) scan
-                found_indices = set()
-                metadata_blocks = re.findall(r"###METADATA_START###(.*?)###METADATA_END###", srt_content)
+                metadata = decode_metadata_payload(srt_content)
+                metadata = {int(e["index"]): e for e in metadata if "index" in e}
 
-                for block in metadata_blocks:
-                    block = block.strip()
-                    try:
-                        # Try raw JSON first
-                        if block.startswith("{"):
-                            data = json.loads(block)
-                            if "index" in data:
-                                found_indices.add(int(data["index"]))
-                            continue
-
-                        # Try Base64
-                        decoded_bytes = base64.b64decode(block)
-                        decoded = decoded_bytes.decode("utf-8")
-                        data = json.loads(decoded)
-                        if "index" in data:
-                            found_indices.add(int(data["index"]))
-                    except Exception:
-                        continue
-
-                srt_ok = sum(1 for i in range(len(expected_meta)) if i in found_indices)
+                srt_ok = sum(1 for i in range(len(expected_meta)) if i in metadata)
 
             if srt_ok != len(expected_meta):
                 print(f"✗ ERROR: FFmpeg SRT parity mismatch: {srt_ok}/{len(expected_meta)} found.")

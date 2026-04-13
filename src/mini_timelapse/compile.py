@@ -265,6 +265,7 @@ def compile_video(
             mstream = container.add_stream("ass")
             mstream.time_base = time_base
             mstream.codec_context.extradata = get_mkv_subtitle_header()
+            m_packet_lifeline = []
 
             for i, (rgb_array, meta) in enumerate(tqdm(source, desc="Compiling", unit="frame")):
                 mpts = int(round(i * 1000 / fps))
@@ -282,6 +283,11 @@ def compile_video(
                 m_packet.dts = mpts
                 m_packet.duration = mdur
                 m_packet.is_keyframe = True
+
+                m_packet_lifeline.append(m_packet)  # Prevent use-after-free
+                if len(m_packet_lifeline) > 1000:  # Avoid memory leak
+                    m_packet_lifeline.pop(0)
+
                 container.mux(m_packet)
 
                 frame = av.VideoFrame.from_ndarray(rgb_array, format="rgb24")
