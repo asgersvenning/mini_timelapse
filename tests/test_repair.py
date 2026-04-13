@@ -54,7 +54,7 @@ def test_repair_infer_metadata():
         # Create a video WITHOUT metadata
         import subprocess
         subprocess.run([
-            "ffmpeg", "-y", "-pattern_type", "glob", "-i", os.path.join(src_dir, "*.jpg"),
+            "ffmpeg", "-y", "-nostdin", "-pattern_type", "glob", "-i", os.path.join(src_dir, "*.jpg"),
             "-c:v", "libx264", "-pix_fmt", "yuv420p", video_no_meta
         ], capture_output=True)
 

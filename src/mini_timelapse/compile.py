@@ -307,6 +307,7 @@ def compile_video(
                 "-hide_banner",
                 "-loglevel",
                 "error",
+                "-nostdin",
                 "-y",
                 "-i",
                 temp_video_path,

@@ -70,6 +70,7 @@ class TimelapseVideo:
                     "-hide_banner",
                     "-loglevel",
                     "error",
+                    "-nostdin",
                     "-y",
                     "-dump_attachment:t:0",
                     tmp_json,
@@ -106,6 +107,7 @@ class TimelapseVideo:
                         "-hide_banner",
                         "-loglevel",
                         "error",
+                        "-nostdin",
                         "-i",
                         self.path,
                         "-map",
@@ -176,6 +178,7 @@ class TimelapseVideo:
                     "-hide_banner",
                     "-loglevel",
                     "error",
+                    "-nostdin",
                     "-y",
                     "-dump_attachment:t",
                     tmp_exif,  # Extracts all attachments, we just read the EXIF one
