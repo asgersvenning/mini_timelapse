@@ -9,6 +9,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from mini_timelapse.reader import TimelapseVideo
+from mini_timelapse.utils import normalize_cli_args
 
 try:
     from pyremotedata.implicit_mount import IOHandler
@@ -153,57 +154,27 @@ def decompile_video(
 
 
 def cli():
+    import sys
+
     parser = argparse.ArgumentParser(
         prog="decompile_timelapse",
         description="Extract frames from a compiled timelapse video back to individual images with EXIF metadata restored.",
     )
+    parser.add_argument("-i", "--input", type=str, required=True, help="Path to the compiled timelapse video (e.g., timelapse.mkv).")
+    parser.add_argument("-o", "--output", type=str, required=False, help="Directory to write extracted images to.")
+    parser.add_argument("--prefix", type=str, default="frame", help="Filename prefix for extracted images. Default: 'frame'.")
+    parser.add_argument("-q", "--quality", type=int, default=95, help="JPEG save quality (1-100). Default: 95.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging.")
+    parser.add_argument("--remote", action="store_true", help="Upload extracted images to a remote SFTP destination via pyremotedata.")
     parser.add_argument(
-        "-i",
-        "--input",
-        type=str,
-        required=True,
-        help="Path to the compiled timelapse video (e.g., timelapse.mkv).",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=str,
-        required=False,
-        help="Directory to write extracted images to.",
-    )
-    parser.add_argument(
-        "--prefix",
-        type=str,
-        default="frame",
-        help="Filename prefix for extracted images. Default: 'frame'.",
-    )
-    parser.add_argument(
-        "-q",
-        "--quality",
-        type=int,
-        default=95,
-        help="JPEG save quality (1-100). Default: 95.",
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable debug logging.",
-    )
-    parser.add_argument(
-        "--remote",
-        action="store_true",
-        help="Upload extracted images to a remote SFTP destination via pyremotedata.",
-    )
-    parser.add_argument(
-        "--sharelink_id",
+        "--sharelink-id",
         type=int,
         required=False,
-        help="Sharelink ID for ERDA. "
-        "If provided, pyremotedata will attempt an anonymous login "
-        "with the given sharelink id as both username and password.",
+        help="Sharelink ID for ERDA. If provided, pyremotedata will attempt an anonymous "
+        "login with the given sharelink id as both username and password.",
     )
-    return parser.parse_args()
+
+    return parser.parse_args(normalize_cli_args(sys.argv[1:]))
 
 
 def main():

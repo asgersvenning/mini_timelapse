@@ -234,24 +234,103 @@ class TimelapseVideo:
     def close(self):
         self._container.close()
 
-    def find_frame_by_time(self, target_time: str | datetime) -> int | None:
-        """Finds the first frame index matching the target time."""
-        if isinstance(target_time, str):
+    def _parse_time(self, time_str: str) -> datetime:
+        """Parses common EXIF and ISO time formats."""
+        try:
+            return datetime.strptime(time_str, "%Y:%m:%d %H:%M:%S")
+        except ValueError:
+            return datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+
+    def _binary_search(self, target_dt: datetime, valid_indices: list[int]) -> int | None:
+        """
+        Performs binary search on valid indices.
+        Returns the closest matching index into self.metadata,
+        or None if a monotonicity violation is detected.
+        """
+        low = 0
+        high = len(valid_indices) - 1
+
+        def get_dt(idx_into_valid):
+            return self._parse_time(self.metadata[valid_indices[idx_into_valid]]["time"])
+
+        while low <= high:
+            mid = (low + high) // 2
             try:
-                target_dt = datetime.strptime(target_time, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                # Handle common EXIF format
-                target_dt = datetime.strptime(target_time, "%Y:%m:%d %H:%M:%S")
+                dt_low = get_dt(low)
+                dt_mid = get_dt(mid)
+                dt_high = get_dt(high)
+
+                if not (dt_low <= dt_mid <= dt_high):
+                    return None  # Monotonicity violation
+            except Exception as e:
+                logger.warning(f"Error during binary search metadata access: {e}")
+                return None
+
+            if dt_mid < target_dt:
+                low = mid + 1
+            elif dt_mid > target_dt:
+                high = mid - 1
+            else:
+                return valid_indices[mid]
+
+        # Binary search finished without exact match; check neighbors
+        candidates = []
+        if 0 <= low < len(valid_indices):
+            candidates.append(valid_indices[low])
+        if 0 <= high < len(valid_indices):
+            candidates.append(valid_indices[high])
+
+        if not candidates:
+            return None
+
+        return min(
+            candidates,
+            key=lambda i: abs((self._parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
+        )
+
+    def _linear_search(self, target_dt: datetime, valid_indices: list[int]) -> int:
+        """Finds the closest matching index via linear scan."""
+        return min(
+            valid_indices,
+            key=lambda i: abs((self._parse_time(self.metadata[i]["time"]) - target_dt).total_seconds()),
+        )
+
+    def get_frame_by_time(
+        self, target_time: str | datetime, max_diff: float | None = None
+    ) -> tuple[np.ndarray, dict, float]:
+        """
+        Finds the frame closest to the target real-world datetime.
+        Uses binary search for O(log N) lookups on sorted data,
+        with automatic fallback to linear search if non-monotonicity is detected.
+
+        Args:
+            target_time: The datetime to search for (string or datetime object).
+            max_diff: Maximum allowed difference in seconds. Raises ValueError if exceeded.
+
+        Returns:
+            A tuple of (frame, metadata, time_diff_seconds).
+        """
+        if isinstance(target_time, str):
+            target_dt = self._parse_time(target_time)
         else:
             target_dt = target_time
 
-        for i, meta in enumerate(self.metadata):
-            if "time" in meta:
-                try:
-                    m_dt = datetime.strptime(meta["time"], "%Y:%m:%d %H:%M:%S")
-                except ValueError:
-                    m_dt = datetime.strptime(meta["time"], "%Y-%m-%d %H:%M:%S")
+        # Filter indices with a valid 'time' field
+        valid_indices = [i for i, meta in enumerate(self.metadata) if "time" in meta]
+        if not valid_indices:
+            raise ValueError("No frames with time metadata found in video.")
 
-                if m_dt == target_dt:
-                    return i
-        return None
+        best_idx = self._binary_search(target_dt, valid_indices)
+
+        if best_idx is None:
+            logger.warning("Non-monotonic timestamps detected; falling back to linear search.")
+            best_idx = self._linear_search(target_dt, valid_indices)
+
+        match_dt = self._parse_time(self.metadata[best_idx]["time"])
+        time_diff = abs((match_dt - target_dt).total_seconds())
+
+        if max_diff is not None and time_diff > max_diff:
+            raise ValueError(f"Closest frame found is {time_diff:.2f}s away, exceeding max_diff of {max_diff}s.")
+
+        frame, meta = self.get_frame(best_idx)
+        return frame, meta, time_diff

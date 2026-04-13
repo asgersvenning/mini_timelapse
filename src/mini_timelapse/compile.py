@@ -16,7 +16,7 @@ import PIL.Image
 from tqdm import tqdm
 
 from mini_timelapse.metadata import encode_metadata_payload, get_mkv_subtitle_header
-from mini_timelapse.utils import natural_sort_key
+from mini_timelapse.utils import natural_sort_key, normalize_cli_args
 
 
 @dataclass
@@ -396,6 +396,8 @@ def compile_video(
 
 
 def cli():
+    import sys
+
     parser = argparse.ArgumentParser(prog="compile_timelapse")
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument("-o", "--output")
@@ -409,7 +411,7 @@ def cli():
     parser.add_argument("--remote", action="store_true")
     parser.add_argument("--sharelink-id", type=int, default=None)
     parser.add_argument("--preext-pattern", type=str, default=None)
-    args, extra = parser.parse_known_args()
+    args, extra = parser.parse_known_args(normalize_cli_args(sys.argv[1:]))
     return {**vars(args), **parse_unknown_arguments(extra)}
 
 

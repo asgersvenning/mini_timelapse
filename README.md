@@ -120,9 +120,9 @@ from mini_timelapse.reader import TimelapseVideo
 with TimelapseVideo("timelapse.mkv") as video:
     print(f"Loaded {len(video)} frames")
 
-    # Temporal Search (New): Get frame closest to a real-world datetime
-    frame, meta = video.get_frame_by_time("2024-06-15 12:00:00")
-    print(f"Actual capture time: {meta.get('time')}")
+    # Temporal Search: Get frame closest to a real-world datetime (O(log N))
+    frame, meta, diff = video.get_frame_by_time("2024-06-15 12:00:00", max_diff=3600)
+    print(f"Closest match is {diff:.1f}s away. Capture time: {meta.get('time')}")
 
     # Random access by index
     frame, meta = video[42]
@@ -180,11 +180,13 @@ decompile_video(
 | `--fps` | Playback framerate | `30` |
 | `-q`, `--quality` | H.264 CRF quality (0–51, lower is better) | `23` |
 | `--preset` | x264 speed preset (`ultrafast` … `veryslow`) | `medium` |
+| `-r`, `--recursive` | Recursively search for images in the input directory | |
+| `-n`, `--n-max` | Maximum number of images to compile | |
 | `-d`, `--dry-run` | Log actions without encoding | |
 | `-v`, `--verbose` | Enable debug logging | |
 | `--remote` | Use pyremotedata backend for SFTP access | |
-| `--sharelink_id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
-| `--preext_pattern` | Optional regex pattern matched to the file path, excluding the file extension | `None` |
+| `--sharelink-id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
+| `--preext-pattern` | Optional regex pattern matched to the file path, excluding the file extension | `None` |
 
 
 ### `timelapse-decompile`
@@ -197,7 +199,7 @@ decompile_video(
 | `-q`, `--quality` | JPEG save quality (1–100) | `95` |
 | `-v`, `--verbose` | Enable debug logging | |
 | `--remote` | Upload extracted images to SFTP destination | |
-| `--sharelink_id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
+| `--sharelink-id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
 
 ## Architecture Details
 

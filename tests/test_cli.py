@@ -101,3 +101,46 @@ def test_cli_missing_required():
     with patch("sys.argv", ["timelapse-decompile"]):
         with pytest.raises(SystemExit):
             decompile_main()
+
+
+def test_normalize_cli_args_helper():
+    """Unit test for the normalization helper itself."""
+    from mini_timelapse.utils import normalize_cli_args
+    args = ["--sharelink_id", "123", "--preext-pattern=.*", "--another_key=value"]
+    normalized = normalize_cli_args(args)
+    assert "--sharelink-id" in normalized
+    assert "--preext-pattern=.*" in normalized
+    assert "--another-key=value" in normalized
+
+
+@pytest.mark.parametrize("flag_style", ["dash", "underscore"])
+def test_compile_cli_normalization_parity(flag_style):
+    """Verify that --sharelink-id and --sharelink_id produce identical results in compile CLI."""
+    val = "12345"
+    # Choose flag based on style
+    flag = "--sharelink-id" if flag_style == "dash" else "--sharelink_id"
+    test_args = ["timelapse-compile", "-i", "in", flag, val, "--remote"]
+
+    with patch("sys.argv", test_args):
+        with patch("mini_timelapse.compile.compile_video"):
+            with patch("mini_timelapse.compile.RemoteImageSource") as mock_remote:
+                compile_main()
+                # Verify that regardless of CLI flag style, the internal call is identical
+                _, kwargs = mock_remote.call_args
+                assert kwargs["sharelink_id"] == int(val)
+
+
+@pytest.mark.parametrize("flag_style", ["dash", "underscore"])
+def test_decompile_cli_normalization_parity(flag_style):
+    """Verify that --sharelink-id and --sharelink_id produce identical results in decompile CLI."""
+    val = "54321"
+    # Choose flag based on style
+    flag = "--sharelink-id" if flag_style == "dash" else "--sharelink_id"
+    test_args = ["timelapse-decompile", "-i", "in.mkv", flag, val, "--remote"]
+
+    with patch("sys.argv", test_args):
+        with patch("mini_timelapse.decompile.decompile_video") as mock_decompile:
+            decompile_main()
+            # Verify that regardless of CLI flag style, the internal call is identical
+            _, kwargs = mock_decompile.call_args
+            assert kwargs["sharelink_id"] == int(val)

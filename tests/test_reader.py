@@ -2,6 +2,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 from mini_timelapse.compile import LocalImageSource, compile_video
@@ -88,16 +89,19 @@ def test_reader_functionality():
             assert len(subset) == 50
             assert subset[0][1]["index"] == 100
             assert subset[-1][1]["index"] == 149
+            print("✓ Slicing passed (simple)")
 
             # Step slice
             stepped = tv[0:250:50]
             assert len(stepped) == 5
             indices = [m["index"] for f, m in stepped]
             assert indices == [0, 50, 100, 150, 200]
+            print("✓ Slicing passed (step)")
 
             # Empty slice
             empty = tv[150:100]
             assert len(empty) == 0
+            print("✓ Slicing passed (empty)")
 
             # Slice with negative indices
             neg_slice = tv[-10:]
@@ -105,14 +109,87 @@ def test_reader_functionality():
             assert neg_slice[0][1]["index"] == 240
             print("✓ Slicing passed")
 
-            # --- find_frame_by_time Test ---
-            print("Testing find_frame_by_time...")
-            # The reader might normalize to YYYY:MM:DD HH:MM:SS or keep it
-            # Let's check what the reader actually stored
+            # --- get_frame_by_time Test ---
+            print("Testing get_frame_by_time...")
             actual_time_str = tv.metadata[123]["time"]
-            found_idx = tv.find_frame_by_time(actual_time_str)
-            assert found_idx == 123
-            print("✓ find_frame_by_time passed")
+            frame, meta, diff = tv.get_frame_by_time(actual_time_str, max_diff=0)
+            assert meta["index"] == 123
+            assert diff == 0
+            assert frame.shape == (240, 320, 3)
+            print("✓ get_frame_by_time passed (exact match)")
+
+            # Test closest match
+            dt_base = tv._parse_time(actual_time_str)
+            dt_offset = dt_base + timedelta(seconds=5)
+            frame, meta, diff = tv.get_frame_by_time(dt_offset)
+            # Since generate_test_images uses ~10min gaps, 123 should still be closest
+            assert meta["index"] == 123
+            assert diff == 5.0
+            print("✓ get_frame_by_time passed (closest match)")
+
+            # Test max_diff
+            try:
+                tv.get_frame_by_time(dt_offset, max_diff=2.0)
+                raise AssertionError("Should have raised ValueError for max_diff")
+            except ValueError as e:
+                assert "exceeding max_diff of 2.0s" in str(e)
+
+            # Test unsorted fallback (requires mocking metadata)
+            orig_meta = tv.metadata.copy()
+            try:
+                # Swap two entries to break monotonicity
+                tv.metadata[10], tv.metadata[20] = tv.metadata[20], tv.metadata[10]
+                # Searching should trigger a warning but still work (linear fallback)
+                frame, meta, diff = tv.get_frame_by_time(actual_time_str)
+                assert meta["index"] == 123
+                assert diff == 0
+            finally:
+                tv.metadata = orig_meta
+            print("✓ get_frame_by_time passed")
+
+            # --- Private Search Methods Test ---
+            print("Testing private search methods (_binary_search, _linear_search)...")
+            valid_indices = list(range(num_frames))
+
+            def test_search(ti):
+                # Exact match
+                tt = tv._parse_time(tv.metadata[ti]["time"])
+                assert tv._binary_search(tt, valid_indices) == ti
+                assert tv._linear_search(tt, valid_indices) == ti
+
+                # Closest neighbor
+                tt_plus = tt + timedelta(seconds=1)
+                assert tv._binary_search(tt_plus, valid_indices) == ti
+                assert tv._linear_search(tt_plus, valid_indices) == ti
+
+            # Test all frames to ensures robustness
+            for ti in range(num_frames):
+                test_search(ti)
+            print("✓ Private search methods passed (all frames)")
+
+            # Out of bounds (before)
+            t_before = tv._parse_time(tv.metadata[0]["time"]) - timedelta(days=1)
+            assert tv._binary_search(t_before, valid_indices) == 0
+            assert tv._linear_search(t_before, valid_indices) == 0
+
+            # Out of bounds (after)
+            t_after = tv._parse_time(tv.metadata[num_frames - 1]["time"]) + timedelta(days=1)
+            assert tv._binary_search(t_after, valid_indices) == num_frames - 1
+            assert tv._linear_search(t_after, valid_indices) == num_frames - 1
+            print("✓ Private search methods passed (out of bounds)")
+
+            # Unsorted fallback for binary search
+            orig_meta = tv.metadata.copy()
+            try:
+                # Swap first and last entries to break monotonicity
+                tv.metadata[0], tv.metadata[num_frames - 1] = tv.metadata[num_frames - 1], tv.metadata[0]
+                # binary search should return None, linear should still work
+                assert tv._binary_search(tv._parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) is None
+                assert tv._linear_search(tv._parse_time(tv.metadata[num_frames // 2]["time"]), valid_indices) == num_frames // 2
+                print("✓ Private search fallback passed")
+            finally:
+                tv.metadata = orig_meta
+            print("✓ Private search methods passed")
 
     finally:
         print(f"🧹 Cleaning up {tmp_dir}")
