@@ -43,6 +43,7 @@ ffmpeg -i timelapse.mkv -map 0:s:0 -f srt extracted_subtitles.srt
 * **Lossless Color**: Encodes using the `yuv444p` color space to preserve 100% of the original RGB chroma data.
 * **Temporal Search**: Query frames by their actual real-world capture time.
 * **Remote IO**: Supports direct compilation from and decompilation to SFTP/ERDA storage via [pyremotedata](https://github.com/asgersvenning/pyremotedata).
+* **Repair**: Fixes damaged, truncated, or out-of-order timelapse videos by re-encoding them based on capture-time metadata.
 
 ## Installation
 
@@ -109,6 +110,19 @@ export PYREMOTEDATA_REMOTE_HOSTNAME="io.erda.dk"
 
 # Decompile to remote
 [uv run] timelapse-decompile -i timelapse.mkv -o /remote/output/folder/ --remote
+```
+
+### 4. Repair Damaged Videos
+If a video was muxed out of order, or some frames are corrupted/missing:
+```bash
+# Fix out-of-order frames (sorted by capture time)
+[uv run] timelapse-repair -i damaged.mkv -o repaired.mkv
+
+# Recover frames from a truncated or corrupted file
+[uv run] timelapse-repair -i truncated.mkv -o recovered.mkv --skip-corrupted
+
+# Create a timelapse from a standard video by inferring timestamps
+[uv run] timelapse-repair -i standard.mp4 -o timelapse.mkv --infer-metadata
 ```
 
 ## Python API
@@ -200,6 +214,19 @@ decompile_video(
 | `-v`, `--verbose` | Enable debug logging | |
 | `--remote` | Upload extracted images to SFTP destination | |
 | `--sharelink-id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
+
+### `timelapse-repair`
+
+| Flag | Description | Default |
+|---|---|---|
+| `-i`, `--input` | Path to damaged timelapse video | *required* |
+| `-o`, `--output` | Path for the repaired output video | derived from `input` |
+| `--fps` | Playback framerate | `30` |
+| `-q`, `--quality` | H.264 quality (CRF, 0–51) | `23` |
+| `--preset` | x264 speed preset | `medium` |
+| `--skip-corrupted` | Skip frames that cannot be decoded or have missing metadata | |
+| `--infer-metadata` | Deduce timestamps from video creation time if missing | |
+| `-v`, `--verbose` | Enable debug logging | |
 
 ## Architecture Details
 

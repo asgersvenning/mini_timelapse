@@ -9,6 +9,7 @@ wheels/
 # Temporary/Development files
 dev/**
 /*.ipynb
+public/**
 
 # Hidden files
 .*/**

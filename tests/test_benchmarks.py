@@ -11,6 +11,7 @@ import pytest
 from mini_timelapse.compile import LocalImageSource, compile_video
 from mini_timelapse.decompile import decompile_video
 from mini_timelapse.reader import TimelapseVideo
+from mini_timelapse.repair import repair_video
 
 # Ensure tests package is findable
 project_root = Path(__file__).resolve().parent.parent
@@ -39,7 +40,18 @@ def benchmark_data():
     with LocalImageSource(spec=src_spec) as source:
         compile_video(source, video_path, fps=30, quality=23)
 
-    yield {"img_dir": img_dir, "video_path": video_path, "tmp_dir": tmp_dir}
+    # Pre-compile a SHUFFLED video for repair benchmarks
+    shuffled_video_path = os.path.join(tmp_dir, "shuffled.mkv")
+    with LocalImageSource(spec=src_spec) as source:
+        random.shuffle(source.files)
+        compile_video(source, shuffled_video_path, fps=30, quality=23)
+
+    yield {
+        "img_dir": img_dir, 
+        "video_path": video_path, 
+        "shuffled_video_path": shuffled_video_path,
+        "tmp_dir": tmp_dir
+    }
 
     shutil.rmtree(tmp_dir)
 
@@ -80,6 +92,18 @@ def test_benchmark_iteration(benchmark, benchmark_data):
                 pass
 
     benchmark(run_iteration)
+
+
+def test_benchmark_repair(benchmark, benchmark_data):
+    """Benchmark the repair utility on an out-of-order video."""
+    output_path = os.path.join(benchmark_data["tmp_dir"], "bench_repair.mkv")
+
+    def run_repair(*args, **kwargs):
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        repair_video(benchmark_data["shuffled_video_path"], output_path, fps=30)
+
+    benchmark.pedantic(run_repair, rounds=5, iterations=1)
 
 
 def test_benchmark_random_access(benchmark, benchmark_data):
@@ -142,7 +166,18 @@ if __name__ == "__main__":
     with LocalImageSource(spec=src_spec) as source:
         compile_video(source, video_path, fps=30, quality=23)
 
-    mock_data = {"img_dir": img_dir, "video_path": video_path, "tmp_dir": tmp_dir}
+    # Shuffled video for profiling repair
+    shuffled_video_path = os.path.join(tmp_dir, "shuffled.mkv")
+    with LocalImageSource(spec=src_spec) as source:
+        random.shuffle(source.files)
+        compile_video(source, shuffled_video_path, fps=30, quality=23)
+
+    mock_data = {
+        "img_dir": img_dir, 
+        "video_path": video_path, 
+        "shuffled_video_path": shuffled_video_path,
+        "tmp_dir": tmp_dir
+    }
 
     # List of all benchmark functions to profile
     benchmarks = [
@@ -150,6 +185,7 @@ if __name__ == "__main__":
         test_benchmark_decompilation,
         test_benchmark_iteration,
         test_benchmark_random_access,
+        test_benchmark_repair,
     ]
 
     os.makedirs("public/profiles", exist_ok=True)

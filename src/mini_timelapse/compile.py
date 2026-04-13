@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import datetime
 from fractions import Fraction
 
@@ -16,15 +15,7 @@ import PIL.Image
 from tqdm import tqdm
 
 from mini_timelapse.metadata import encode_metadata_payload, get_mkv_subtitle_header
-from mini_timelapse.utils import natural_sort_key, normalize_cli_args
-
-
-@dataclass
-class TimelapseSpec:
-    width: int
-    height: int
-    master_exif: bytes | None
-
+from mini_timelapse.utils import BaseImageSource, TimelapseSpec, natural_sort_key, normalize_cli_args
 
 try:
     from pyremotedata.implicit_mount import IOHandler, RemotePathIterator
@@ -64,38 +55,6 @@ def extract_image_metadata(img: PIL.Image.Image) -> dict:
                 continue
 
     return meta
-
-
-class BaseImageSource:
-    @dataclass
-    class SourceSpec:
-        src: str
-        n_max: int | None = None
-        recursive: bool = False
-
-    def __init__(self, spec: SourceSpec):
-        self.spec = spec
-
-    @property
-    def src(self):
-        return self.spec.src
-
-    @property
-    def n_max(self):
-        return self.spec.n_max
-
-    @property
-    def recursive(self):
-        return self.spec.recursive
-
-    def __enter__(self):
-        raise NotImplementedError
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
-        raise NotImplementedError
-
-    def get_timelapse_spec(self) -> TimelapseSpec:
-        raise NotImplementedError
 
 
 class LocalImageSource(BaseImageSource):

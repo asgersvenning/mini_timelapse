@@ -3,12 +3,14 @@ import logging
 import os
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from datetime import datetime
 
 import av
 import numpy as np
 
 from mini_timelapse.metadata import decode_metadata_payload
+from mini_timelapse.utils import BaseImageSource, TimelapseSpec
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,9 @@ class TimelapseVideo:
                 self.length = int(round(float(self._container.duration / av.time_base) * fps))
             else:
                 self.length = 0
+
+        # Extraction stats
+        self.metadata_sources = set()
 
         # Extract metadata
         self.metadata = self._extract_metadata()
@@ -83,6 +88,7 @@ class TimelapseVideo:
 
                     if isinstance(attachment_data, list):
                         logger.info(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
+                        self.metadata_sources.add("attachment")
                         for item in attachment_data:
                             if "index" in item:
                                 metadata_dict[int(item["index"])] = item
@@ -114,6 +120,8 @@ class TimelapseVideo:
                     if process.returncode == 0:
                         srt_text = stdout.decode("utf-8", errors="ignore")
                         meta_items = decode_metadata_payload(srt_text)
+                        if meta_items:
+                            self.metadata_sources.add("subtitle")
                         for item in meta_items:
                             if "index" in item:
                                 idx = int(item["index"])
@@ -129,6 +137,7 @@ class TimelapseVideo:
             if sub_stream:
                 self._container.seek(0)
                 for packet in self._container.demux(sub_stream):
+                    self.metadata_sources.add("demux")
                     try:
                         for subtitle in packet.decode():
                             for rect in getattr(subtitle, "rects", []):
@@ -334,3 +343,51 @@ class TimelapseVideo:
 
         frame, meta = self.get_frame(best_idx)
         return frame, meta, time_diff
+
+
+class VideoImageSource(BaseImageSource):
+    """
+    Provides images from an existing TimelapseVideo.
+    Useful for repair, re-encoding, or filtering.
+    """
+
+    def __init__(
+        self,
+        video: TimelapseVideo,
+        indices: list[int] = None,
+        skip_corrupted: bool = False,
+    ):
+        # We use the video path as the source string for SourceSpec
+        spec = BaseImageSource.SourceSpec(src=video.path)
+        super().__init__(spec)
+        self.video = video
+        self.indices = indices if indices is not None else list(range(len(video)))
+        self.skip_corrupted = skip_corrupted
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def get_timelapse_spec(self) -> TimelapseSpec:
+        return TimelapseSpec(
+            width=self.video.width,
+            height=self.video.height,
+            master_exif=self.video.master_exif,
+        )
+
+    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
+        for idx in self.indices:
+            try:
+                yield self.video.get_frame(idx)
+            except Exception as e:
+                if self.skip_corrupted:
+                    logger.warning(f"Skipping corrupted/missing frame {idx}: {e}")
+                    continue
+                else:
+                    logger.error(f"Failed to access frame {idx}: {e}")
+                    raise
+
+    def __len__(self):
+        return len(self.indices)

@@ -1,4 +1,9 @@
 import re
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
+
+import numpy as np
 
 
 def natural_sort_key(s: str):
@@ -26,3 +31,47 @@ def normalize_cli_args(argv: list[str]) -> list[str]:
         else:
             normalized.append(arg)
     return normalized
+
+
+@dataclass
+class TimelapseSpec:
+    width: int
+    height: int
+    master_exif: bytes | None
+
+
+class BaseImageSource(ABC):
+    @dataclass
+    class SourceSpec:
+        src: str
+        n_max: int | None = None
+        recursive: bool = False
+
+    def __init__(self, spec: SourceSpec):
+        self.spec = spec
+
+    @property
+    def src(self):
+        return self.spec.src
+
+    @property
+    def n_max(self):
+        return self.spec.n_max
+
+    @property
+    def recursive(self):
+        return self.spec.recursive
+
+    def __enter__(self):
+        raise NotImplementedError
+
+    def __exit__(self, *args):
+        pass
+
+    @abstractmethod
+    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_timelapse_spec(self) -> TimelapseSpec:
+        raise NotImplementedError

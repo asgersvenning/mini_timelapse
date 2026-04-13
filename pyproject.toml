@@ -49,6 +49,7 @@ select = ["E", "F", "UP", "I"]
 [project.scripts]
 timelapse-compile = "mini_timelapse.compile:main"
 timelapse-decompile = "mini_timelapse.decompile:main"
+timelapse-repair = "mini_timelapse.repair:main"
 
 [build-system]
 requires = ["hatchling"]
