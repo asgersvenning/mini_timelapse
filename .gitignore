@@ -6,6 +6,10 @@ dist/
 wheels/
 *.egg-info
 
+# Temporary/Development files
+dev/**
+/*.ipynb
+
 # Hidden files
 .*/**
 !.gitignore
