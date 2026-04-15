@@ -1,3 +1,5 @@
+import logging
+
 from mini_timelapse.compile import LocalImageSource, compile_video
 from mini_timelapse.decompile import decompile_video
 from mini_timelapse.reader import TimelapseVideo, VideoImageSource
@@ -11,3 +13,6 @@ __all__ = [
     "LocalImageSource",
     "VideoImageSource",
 ]
+
+
+logging.getLogger(__name__).addHandler(logging.NullHandler())

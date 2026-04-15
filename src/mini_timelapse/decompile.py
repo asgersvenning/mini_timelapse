@@ -10,7 +10,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from mini_timelapse.reader import TimelapseVideo
-from mini_timelapse.utils import normalize_cli_args, parse_time
+from mini_timelapse.utils import normalize_cli_args, parse_time, set_module_verbosity
 
 try:
     from pyremotedata.implicit_mount import IOHandler
@@ -19,7 +19,7 @@ try:
 except ImportError:
     REMOTE_AVAILABLE = False
 
-logger = logging.getLogger("decompile_timelapse")
+logger = logging.getLogger(__name__)
 
 
 def _build_exif_bytes(meta: dict, master_exif: bytes = None) -> bytes:
@@ -216,8 +216,7 @@ def cli():
 
 def main():
     args = cli()
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
+    set_module_verbosity(logging.DEBUG if args.verbose else logging.INFO)
 
     decompile_video(
         video_path=args.input,

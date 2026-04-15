@@ -48,32 +48,46 @@ class TimelapseVideo:
     def __len__(self):
         return self.length
 
-    def _extract_sovereign_metadata(self):
-        """Attempts to load the Matroska JSON attachment instantly."""
-        metadata = dict()
+    def _get_attachment_streams(self) -> list[dict]:
+        """Probes the media file and returns a list of all attachment streams."""
+        probe_cmd = ["ffprobe", "-hide_banner", "-loglevel", "quiet", "-print_format", "json", "-show_streams", self.path]
         try:
-            # 1. Probe for attachments to validate existence and avoid opaque blocking
-            probe_cmd = ["ffprobe", "-hide_banner", "-loglevel", "quiet", "-print_format", "json", "-show_streams", self.path]
-
             logger.debug(f"Probing {self.path} for attachments...")
             probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
             probe_data = json.loads(probe_result.stdout)
 
-            attachments = [stream for stream in probe_data.get("streams", []) if stream.get("codec_type") == "attachment"]
+            return [stream for stream in probe_data.get("streams", []) if stream.get("codec_type") == "attachment"]
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            logger.debug(f"Failed to probe file {self.path}: {e}")
+            return []
 
+    def _extract_sovereign_metadata(self):
+        """Attempts to load the Matroska JSON attachment instantly."""
+        metadata = dict()
+        try:
+            attachments = self._get_attachment_streams()
             if not attachments:
                 logger.debug(f"No attachments found in {self.path}. Skipping extraction.")
                 return metadata
 
-            # Log useful information about the attachment we are targeting
+            # Find the JSON attachment (defaults to 0 if multiple exist but aren't named,
+            # though they really should be named by your encoder)
+            target_idx = 0
             target_attachment = attachments[0]
+            for i, stream in enumerate(attachments):
+                filename = stream.get("tags", {}).get("filename", "").lower()
+                if filename.endswith(".json"):
+                    target_idx = i
+                    target_attachment = stream
+                    break
+
             tags = target_attachment.get("tags", {})
             attached_filename = tags.get("filename", "unknown_filename")
             mimetype = tags.get("mimetype", "unknown_mimetype")
+            logger.debug(
+                f"Found attachment '{attached_filename}' ({mimetype}) at index {target_idx}. Proceeding with optimized extraction..."
+            )
 
-            logger.debug(f"Found attachment '{attached_filename}' ({mimetype}). Proceeding with optimized extraction...")
-
-            # 2. Optimized extraction (skipping video/audio/sub decoding)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_json = os.path.join(tmp_dir, "extracted_meta.json")
                 cmd = [
@@ -83,14 +97,14 @@ class TimelapseVideo:
                     "error",
                     "-nostdin",
                     "-y",
-                    "-dump_attachment:t:0",
+                    f"-dump_attachment:t:{target_idx}",
                     tmp_json,
                     "-i",
                     self.path,
                     "-map",
-                    "0:t:0",  # Give the null output exactly one stream (the attachment)
+                    f"0:t:{target_idx}",
                     "-c",
-                    "copy",  # Tell ffmpeg not to decode anything, just copy
+                    "copy",
                     "-f",
                     "null",
                     "-",
@@ -112,6 +126,56 @@ class TimelapseVideo:
             logger.debug(f"Attachment extraction missing or failed, defaulting to JIT subtitle reading: {e}")
 
         return metadata
+
+    @property
+    def master_exif(self) -> bytes | None:
+        """Attempts to extract the original raw EXIF binary attachment instantly."""
+        try:
+            attachments = self._get_attachment_streams()
+
+            target_idx = None
+            for i, stream in enumerate(attachments):
+                filename = stream.get("tags", {}).get("filename", "").lower()
+                if filename.endswith(".exif"):
+                    target_idx = i
+                    break
+
+            if target_idx is None:
+                logger.debug(f"No EXIF attachment found in {self.path}.")
+                return None
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_exif = os.path.join(tmp_dir, "master.exif")
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    f"-dump_attachment:t:{target_idx}",
+                    tmp_exif,
+                    "-i",
+                    self.path,
+                    "-map",
+                    f"0:t:{target_idx}",
+                    "-c",
+                    "copy",
+                    "-f",
+                    "null",
+                    "-",
+                ]
+
+                subprocess.run(cmd, timeout=None, check=True, capture_output=True)
+
+                if os.path.exists(tmp_exif):
+                    with open(tmp_exif, "rb") as f:
+                        return f.read()
+
+        except Exception as e:
+            logger.debug(f"Could not extract master EXIF attachment: {e}")
+
+        return None
 
     def _get_metadata(self, index: int, force_subtitle: bool = False) -> dict:
         """
@@ -150,36 +214,6 @@ class TimelapseVideo:
         if not force_subtitle:
             self.metadata[index] = {}
         return {}
-
-    @property
-    def master_exif(self) -> bytes | None:
-        """Attempts to extract the original raw EXIF binary attachment."""
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_exif = os.path.join(tmp_dir, "master.exif")
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-dump_attachment:t",
-                    tmp_exif,
-                    "-i",
-                    self.path,
-                    "-f",
-                    "null",
-                    "-",
-                ]
-                subprocess.run(cmd, timeout=None, capture_output=True)
-
-                if os.path.exists(tmp_exif):
-                    with open(tmp_exif, "rb") as f:
-                        return f.read()
-        except Exception as e:
-            logger.debug(f"Could not extract master EXIF attachment: {e}")
-        return None
 
     def get_frame(self, index: int) -> tuple[np.ndarray, dict]:
         """Returns the RGB frame and metadata for a given index."""

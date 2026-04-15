@@ -6,9 +6,9 @@ from datetime import datetime, timedelta
 
 from mini_timelapse.compile import compile_video
 from mini_timelapse.reader import TimelapseVideo, VideoImageSource
-from mini_timelapse.utils import normalize_cli_args, parse_time
+from mini_timelapse.utils import normalize_cli_args, parse_time, set_module_verbosity
 
-logger = logging.getLogger("timelapse-repair")
+logger = logging.getLogger(__name__)
 
 
 def repair_video(
@@ -172,8 +172,7 @@ def cli():
 
 def main():
     args = cli()
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
+    set_module_verbosity(logging.DEBUG if args.verbose else logging.INFO)
 
     repair_video(
         input_path=args.input,

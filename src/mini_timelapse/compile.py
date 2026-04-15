@@ -12,7 +12,14 @@ import PIL.Image
 from tqdm import tqdm
 
 from mini_timelapse.metadata import encode_metadata_payload, get_mkv_subtitle_header
-from mini_timelapse.utils import BaseImageSource, LocalImageSource, RemoteImageSource, extract_image_metadata, normalize_cli_args
+from mini_timelapse.utils import (
+    BaseImageSource,
+    LocalImageSource,
+    RemoteImageSource,
+    extract_image_metadata,
+    normalize_cli_args,
+    set_module_verbosity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +249,7 @@ def cli():
 
 def main():
     args = cli()
-    log_level = logging.DEBUG if args.get("verbose") else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s")
+    set_module_verbosity(logging.DEBUG if args.get("verbose") else logging.INFO)
     input, output = args.pop("input"), args.pop("output")
     src_spec = BaseImageSource.SourceSpec(
         src=input,

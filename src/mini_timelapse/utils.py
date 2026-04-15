@@ -19,6 +19,24 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def set_module_verbosity(log_level: int | str | None = None) -> None:
+    """
+    Configures console logging for CLI tools.
+    Sets the package log level without making third-party dependencies noisy.
+    """
+    if log_level is None:
+        log_level = "INFO"
+    elif isinstance(log_level, str):
+        log_level = log_level.strip().upper()
+
+    # Set the global layout
+    logging.basicConfig(format="%(levelname)s: %(message)s", force=True)
+
+    # Exclusively target this package's root logger
+    logging.getLogger("mini_timelapse").setLevel(log_level)
+
+
 IMAGE_PATTERN = r"\.([pP][nN][gG]|[jJ][pP][eE]?[gG]|[tT][iI][fF][fF]?)$"
 _DEFAULT_FORMATS = [
     "%Y:%m:%d %H:%M:%S",
