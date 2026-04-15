@@ -44,7 +44,6 @@ def repair_video(
         logger.debug(f"Video has {num_frames} frames")
 
         # --- Metadata Integrity Check ---
-        print(video._extract_sovereign_metadata())
         attachment_indices = [i for i, m in video._extract_sovereign_metadata().items() if "time" in m]
         if attachment_indices:
             logger.debug("Validated metadata from attachment")
