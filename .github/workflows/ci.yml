@@ -108,6 +108,7 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: ./public
         destination_dir: ${{ steps.profile-vars.outputs.dir }}
+        keep_files: true
 
     - name: Comment PR with links
       if: github.event_name == 'pull_request'

@@ -5,180 +5,16 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
 from fractions import Fraction
 
 import av
-import numpy as np
 import PIL.Image
 from tqdm import tqdm
 
 from mini_timelapse.metadata import encode_metadata_payload, get_mkv_subtitle_header
-from mini_timelapse.utils import BaseImageSource, TimelapseSpec, natural_sort_key, normalize_cli_args, parse_time
-
-try:
-    from pyremotedata.implicit_mount import IOHandler, RemotePathIterator
-except ImportError:
-    IOHandler = None
-    RemotePathIterator = None
+from mini_timelapse.utils import BaseImageSource, LocalImageSource, RemoteImageSource, extract_image_metadata, normalize_cli_args
 
 logger = logging.getLogger(__name__)
-
-IMAGE_PATTERN = r"\.([pP][nN][gG]|[jJ][pP][eE]?[gG]|[tT][iI][fF][fF]?)$"
-
-
-def extract_image_metadata(img: PIL.Image.Image) -> dict:
-    """
-    Unified robust function to extract and parse EXIF metadata from a PIL Image.
-    Returns a dictionary with both raw string values and parsed objects.
-    """
-    meta = {}
-    exif = img.getexif()
-    if not exif:
-        return meta
-
-    # DateTimeOriginal (36867) usually lives in the Exif sub-IFD (0x8769)
-    exif_ifd = exif.get_ifd(0x8769)
-    dt_str = exif_ifd.get(36867) or exif.get(306)
-
-    if dt_str:
-        dt_str = str(dt_str).strip()
-        meta["time"] = dt_str
-        meta["dt"] = parse_time(dt_str)
-
-    return meta
-
-
-class LocalImageSource(BaseImageSource):
-    """Provides images from a local directory or file list."""
-
-    def __init__(self, spec: BaseImageSource.SourceSpec):
-        super().__init__(spec)
-        if os.path.isdir(self.src):
-            if self.recursive:
-                self.files = [
-                    os.path.join(root, f)
-                    for root, dirs, files in os.walk(self.src)
-                    for f in files
-                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff"))
-                ]
-            else:
-                self.files = [
-                    os.path.join(self.src, f) for f in os.listdir(self.src) if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff"))
-                ]
-            self.files.sort(key=natural_sort_key)
-        else:
-            self.files = [self.src]
-        if self.n_max is not None:
-            self.files = self.files[: min(len(self.files), self.n_max)]
-
-    def get_timelapse_spec(self) -> TimelapseSpec:
-        """Analyzes the first frame to determine video constraints and extract master EXIF."""
-        img = PIL.Image.open(self.files[0])
-        # Raw bytes of the EXIF block, or None if it doesn't exist
-        raw_exif = img.info.get("exif")
-        return TimelapseSpec(width=img.size[0], height=img.size[1], master_exif=raw_exif)
-
-    def _get_image_and_metadata(self, path: str):
-        img = PIL.Image.open(path)
-        meta = {"filename": os.path.basename(path)}
-
-        # Unified EXIF extraction
-        exif_data = extract_image_metadata(img)
-        if "time" in exif_data:
-            meta["time"] = exif_data["time"]
-
-        return np.array(img), meta
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
-        for f in self.files:
-            try:
-                yield self._get_image_and_metadata(f)
-            except Exception as e:
-                logger.warning(f"Failed to open image {f}: {e}")
-                continue
-
-    def __len__(self):
-        return len(self.files)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-
-class RemoteImageSource(BaseImageSource):
-    """Provides images from a remote SFTP source via pyremotedata."""
-
-    def __init__(self, spec: BaseImageSource.SourceSpec, sharelink_id: int | None = None, preext_pattern: str | None = None):
-        super().__init__(spec)
-        if IOHandler is None or RemotePathIterator is None:
-            raise ImportError(
-                "pyremotedata is not installed. Please install it to use remote sources (pip install mini-timelapse[remote])."
-            )
-        self.pattern = f"^.*{preext_pattern}.*{IMAGE_PATTERN}$" if preext_pattern is not None else IMAGE_PATTERN
-        self.handler = IOHandler(user=sharelink_id, password=sharelink_id)
-        self.files = None
-
-    def get_timelapse_spec(self) -> TimelapseSpec:
-        """Downloads and analyzes the first frame to determine video constraints and extract master EXIF."""
-        if self.files is None:
-            raise RuntimeError("__iter__ called before __enter__")
-        local_file = self.handler.download(self.files[0])
-        try:
-            img = PIL.Image.open(local_file)
-            raw_exif = img.info.get("exif")
-            return TimelapseSpec(width=img.size[0], height=img.size[1], master_exif=raw_exif)
-        finally:
-            os.remove(local_file)
-
-    def _get_image_and_metadata(self, path: str):
-        img = PIL.Image.open(path)
-        meta = {"filename": os.path.basename(path), "source": "remote"}
-
-        # Unified EXIF extraction
-        exif_data = extract_image_metadata(img)
-        if "time" in exif_data:
-            meta["time"] = exif_data["time"]
-
-        return np.array(img), meta
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
-        if RemotePathIterator is None:
-            raise ImportError(
-                "pyremotedata.implicit_mount.RemotePathIterator is not installed. "
-                "Please install it to use remote sources (pip install mini-timelapse[remote])."
-            )
-        if self.files is None:
-            raise RuntimeError("__iter__ called before __enter__")
-        iterator = RemotePathIterator(io_handler=self.handler, clear_local=True)
-        iterator.remote_paths = self.files
-        for lf, rf in iterator:
-            try:
-                yield self._get_image_and_metadata(lf)
-            except Exception as e:
-                logger.warning(f"Failed to open image {rf} ({lf}): {e}")
-                continue
-
-    def __len__(self):
-        if self.files is None:
-            raise RuntimeError("__len__ called before __enter__")
-        return len(self.files)
-
-    def __enter__(self):
-        self.handler.__enter__()
-        self.handler.cd(self.src)
-        self.files = self.handler.get_file_index(pattern=self.pattern, nmax=self.n_max)
-        if not self.recursive:
-            self.files = [f for f in self.files if f.count("/") < 1]
-        if len(self.files) == 0:
-            raise ValueError(f"No files found matching pattern '{self.pattern}' in directory '{self.src}'.")
-        self.files.sort(key=natural_sort_key)
-        return self
-
-    def __exit__(self, *args):
-        self.handler.__exit__()
 
 
 def parse_unknown_arguments(extra_args: list[str]) -> dict:
@@ -268,6 +104,7 @@ def compile_video(
             m_packet_lifeline = []
 
             for i, (rgb_array, meta) in enumerate(tqdm(source, desc="Compiling", unit="frame")):
+                logger.info(f"{i=} {rgb_array.shape=} {meta=}")
                 mpts = int(round(i * 1000 / fps))
                 next_mpts = int(round((i + 1) * 1000 / fps))
                 mdur = max(1, next_mpts - mpts)

@@ -1,7 +1,9 @@
 import argparse
 import logging
 import os
+import queue
 import tempfile
+import threading
 
 import piexif
 from PIL import Image
@@ -21,33 +23,27 @@ logger = logging.getLogger("decompile_timelapse")
 
 
 def _build_exif_bytes(meta: dict, master_exif: bytes = None) -> bytes:
-    """Reconstruct EXIF data, preserving the original camera template if available."""
+    # ... (Keep this function exactly as it was, no changes needed) ...
     exif_dict = None
 
-    # Load the master EXIF template if we have it
     if master_exif:
         try:
             exif_dict = piexif.load(master_exif)
-            # Remove thumbnail to avoid saving Frame 0's thumbnail on every single image
             exif_dict.pop("thumbnail", None)
         except Exception as e:
             logger.warning(f"Failed to load master EXIF template: {e}. Falling back to blank EXIF.")
 
-    # Fallback to a blank slate if no master EXIF exists or if parsing failed
     if not exif_dict:
         exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "Interop": {}}
 
-    # Patch DateTimeOriginal
     if "time" in meta:
         dt_str = meta["time"]
         dt = parse_time(dt_str)
         exif_dt = dt.strftime("%Y:%m:%d %H:%M:%S").encode("utf-8")
-        # Update all standard EXIF time fields to ensure consistency
         exif_dict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exif_dt
         exif_dict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exif_dt
         exif_dict["0th"][piexif.ImageIFD.DateTime] = exif_dt
 
-    # Patch GPS coordinates (Using your existing Rational conversion logic)
     if "lat" in meta and "lon" in meta:
         lat = meta["lat"]
         lon = meta["lon"]
@@ -65,6 +61,44 @@ def _build_exif_bytes(meta: dict, master_exif: bytes = None) -> bytes:
         exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b"E" if lon >= 0 else b"W"
 
     return piexif.dump(exif_dict)
+
+
+def _image_writer_worker(write_queue: queue.Queue, pbar: tqdm, errors: list):
+    """Background thread function that drains the queue and saves images."""
+    while True:
+        item = write_queue.get()
+        if item is None:  # Sentinel value to kill the thread
+            write_queue.task_done()
+            break
+
+        frame_array, meta, out_path, master_exif_bytes, quality = item
+
+        try:
+            # Robust Resume: Skip if fully written
+            if os.path.exists(out_path):
+                # Using a low log level inside tight loops keeps stdout clean
+                pass
+            else:
+                img = Image.fromarray(frame_array)
+                tmp_path = out_path + ".tmp"
+                try:
+                    if meta:
+                        exif_bytes = _build_exif_bytes(meta, master_exif=master_exif_bytes)
+                        img.save(tmp_path, "JPEG", quality=quality, exif=exif_bytes)
+                    else:
+                        img.save(tmp_path, "JPEG", quality=quality)
+
+                    os.replace(tmp_path, out_path)
+                except Exception:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                    raise
+        except Exception as e:
+            errors.append(e)
+        finally:
+            # Safely update the progress bar from the background thread
+            pbar.update(1)
+            write_queue.task_done()
 
 
 def decompile_video(
@@ -104,35 +138,46 @@ def decompile_video(
 
         logger.info(f"Decompiling {n} frames from {video_path} -> {output_dir}/")
 
-        for i, (frame_array, meta) in tqdm(enumerate(video), total=n, desc="Decompiling", unit="frame"):
-            if meta and "filename" in meta:
-                filename = meta["filename"]
-            else:
-                filename = f"{prefix}_{str(i).zfill(pad)}.jpg"
+        # Concurrency Setup
+        num_workers = min(8, (os.cpu_count() or 4) + 4)  # Optimize for I/O bounds
+        write_queue = queue.Queue(maxsize=16)  # Cap memory usage
+        errors = []
+        workers = []
 
-            out_path = os.path.join(effective_output, filename)
+        with tqdm(total=n, desc="Decompiling", unit="frame") as pbar:
+            # Spin up the background writers
+            for _ in range(num_workers):
+                t = threading.Thread(target=_image_writer_worker, args=(write_queue, pbar, errors), daemon=True)
+                t.start()
+                workers.append(t)
 
-            # Robust Resume: Skip if fully written
-            if os.path.exists(out_path):
-                logger.debug(f"File {out_path} already exists. Skipping.")
-                continue
+            # Producer loop (Main Thread)
+            for i, (frame_array, meta) in enumerate(video):
+                if errors:
+                    logger.error("A background write failed. Aborting extraction.")
+                    break
 
-            img = Image.fromarray(frame_array)
-
-            # ATOMIC WRITE: Save to .tmp, then rename.
-            tmp_path = out_path + ".tmp"
-            try:
-                if meta:
-                    exif_bytes = _build_exif_bytes(meta, master_exif=master_exif_bytes)
-                    img.save(tmp_path, "JPEG", quality=quality, exif=exif_bytes)
+                if meta and "filename" in meta:
+                    filename = meta["filename"]
                 else:
-                    img.save(tmp_path, "JPEG", quality=quality)
+                    filename = f"{prefix}_{str(i).zfill(pad)}.jpg"
 
-                os.replace(tmp_path, out_path)
-            except Exception:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                raise
+                out_path = os.path.join(effective_output, filename)
+
+                # This will block if the queue is full, naturally throttling the PyAV loop
+                write_queue.put((frame_array, meta, out_path, master_exif_bytes, quality))
+
+            # Send the kill signals to the workers
+            for _ in range(num_workers):
+                write_queue.put(None)
+
+            # Block the main thread until all queue items are flushed to disk
+            for t in workers:
+                t.join()
+
+        # Re-raise the first background error so the script crashes appropriately
+        if errors:
+            raise RuntimeError(f"Decompilation failed: {errors[0]}") from errors[0]
 
         if remote:
             logger.info(f"Uploading {n} images to remote: {output_dir}...")

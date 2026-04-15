@@ -3,7 +3,6 @@ import logging
 import os
 import subprocess
 import tempfile
-from collections.abc import Iterator
 from datetime import datetime
 
 import av
@@ -21,7 +20,7 @@ class TimelapseVideo:
     with frame-accurate metadata recovery via Just-In-Time (JIT) extraction.
     """
 
-    def __init__(self, path: str, fps: float = 30.0, container_kwargs: dict | None = None):
+    def __init__(self, path: str, fps: float = 30.0, lazy: bool = False, container_kwargs: dict | None = None):
         self.path = path
         self._fps = fps if fps is not None else 30.0
         self._container = av.open(path, **(container_kwargs or {}))
@@ -41,9 +40,10 @@ class TimelapseVideo:
             else:
                 self.length = 0
 
-        # Attempt to load the sovereign attachment upfront (Instant / O(1))
-        # If it fails, self.metadata is initialized with empty dicts for JIT fallback.
-        self.metadata = self._extract_sovereign_metadata()
+        if lazy:
+            self.metadata = {}
+        else:
+            self.metadata = self._extract_sovereign_metadata()
 
     def __len__(self):
         return self.length
@@ -52,6 +52,28 @@ class TimelapseVideo:
         """Attempts to load the Matroska JSON attachment instantly."""
         metadata = dict()
         try:
+            # 1. Probe for attachments to validate existence and avoid opaque blocking
+            probe_cmd = ["ffprobe", "-hide_banner", "-loglevel", "quiet", "-print_format", "json", "-show_streams", self.path]
+
+            logger.debug(f"Probing {self.path} for attachments...")
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
+            probe_data = json.loads(probe_result.stdout)
+
+            attachments = [stream for stream in probe_data.get("streams", []) if stream.get("codec_type") == "attachment"]
+
+            if not attachments:
+                logger.debug(f"No attachments found in {self.path}. Skipping extraction.")
+                return metadata
+
+            # Log useful information about the attachment we are targeting
+            target_attachment = attachments[0]
+            tags = target_attachment.get("tags", {})
+            attached_filename = tags.get("filename", "unknown_filename")
+            mimetype = tags.get("mimetype", "unknown_mimetype")
+
+            logger.debug(f"Found attachment '{attached_filename}' ({mimetype}). Proceeding with optimized extraction...")
+
+            # 2. Optimized extraction (skipping video/audio/sub decoding)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_json = os.path.join(tmp_dir, "extracted_meta.json")
                 cmd = [
@@ -65,11 +87,15 @@ class TimelapseVideo:
                     tmp_json,
                     "-i",
                     self.path,
+                    "-map",
+                    "0:t:0",  # Give the null output exactly one stream (the attachment)
+                    "-c",
+                    "copy",  # Tell ffmpeg not to decode anything, just copy
                     "-f",
                     "null",
                     "-",
                 ]
-                logger.debug(f"Extracting metadata from {self.path}, this may take a while for large files")
+
                 subprocess.run(cmd, timeout=None, check=True, capture_output=True)
 
                 if os.path.exists(tmp_json):
@@ -81,6 +107,7 @@ class TimelapseVideo:
                         for item in attachment_data:
                             if "index" in item and 0 <= int(item["index"]) < self.length:
                                 metadata[int(item["index"])] = item
+
         except Exception as e:
             logger.debug(f"Attachment extraction missing or failed, defaulting to JIT subtitle reading: {e}")
 
@@ -308,18 +335,15 @@ class VideoImageSource(BaseImageSource):
         indices: list[int] = None,
         skip_corrupted: bool = False,
     ):
-        # We use the video path as the source string for SourceSpec
         spec = BaseImageSource.SourceSpec(src=video.path)
         super().__init__(spec)
         self.video = video
         self.indices = indices if indices is not None else list(range(len(video)))
         self.skip_corrupted = skip_corrupted
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
+    @property
+    def elements(self):
+        return self.indices
 
     def get_timelapse_spec(self) -> TimelapseSpec:
         return TimelapseSpec(
@@ -329,19 +353,20 @@ class VideoImageSource(BaseImageSource):
         )
 
     def _get_image_and_metadata(self, idx: int):
-        return self.video.get_frame(idx)
+        # If skip_corrupted is False, we let exceptions bubble up naturally.
+        # Note: Depending on your exact implementation of BaseImageSource, you may
+        # want to ensure the base class doesn't suppress this exception if skip_corrupted is False.
+        try:
+            return self.video.get_frame(idx)
+        except Exception as e:
+            if not self.skip_corrupted:
+                logger.error(f"Failed to access frame {idx}: {e}")
+                raise
+            # If skipping, raising a generic exception signals the base class to skip
+            raise RuntimeError(f"Corrupted frame {idx}") from e
 
-    def __iter__(self) -> Iterator[tuple[np.ndarray, dict]]:
-        for idx in self.indices:
-            try:
-                yield self._get_image_and_metadata(idx)
-            except Exception as e:
-                if self.skip_corrupted:
-                    logger.warning(f"Skipping corrupted/missing frame {idx}: {e}")
-                    continue
-                else:
-                    logger.error(f"Failed to access frame {idx}: {e}")
-                    raise
+    def __enter__(self):
+        return self
 
-    def __len__(self):
-        return len(self.indices)
+    def __exit__(self, *args):
+        pass

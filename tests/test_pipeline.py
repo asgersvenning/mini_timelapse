@@ -13,11 +13,7 @@ Usage:
 If no image_dir is given, creates synthetic test images.
 """
 
-from mini_timelapse.metadata import decode_metadata_payload
-import base64
-import json
 import os
-import re
 import sys
 import tempfile
 from datetime import datetime
@@ -28,6 +24,7 @@ import piexif
 
 from mini_timelapse.compile import LocalImageSource, compile_video, get_exif_data
 from mini_timelapse.decompile import decompile_video
+from mini_timelapse.metadata import decode_metadata_payload
 from mini_timelapse.utils import natural_sort_key
 
 # Fix import path for both IDE and runtime

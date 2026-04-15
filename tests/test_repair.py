@@ -32,13 +32,13 @@ def test_repair_sorting():
             compile_video(source, video_bad, fps=30)
 
         with TimelapseVideo(video_bad) as tv:
-            times = [parse_time(m["time"]) for m in tv.metadata.values()]
+            times = [parse_time(tv._get_metadata(i)["time"]) for i in range(len(tv))]
             assert times[0] > times[-1]
 
         repair_video(input_path=video_bad, output_path=video_good, fps=30)
 
         with TimelapseVideo(video_good) as tv:
-            times = [parse_time(m["time"]) for m in tv.metadata.values()]
+            times = [parse_time(tv._get_metadata(i)["time"]) for i in range(len(tv))]
             assert times[0] < times[-1]
             assert len(tv) == num_frames
     finally:
@@ -86,7 +86,7 @@ def test_repair_infer_metadata():
         assert os.path.exists(video_repaired)
         with TimelapseVideo(video_repaired) as tv:
             assert len(tv) >= 5
-            assert "time" in tv.metadata[0]
+            assert "time" in tv._get_metadata(0)
     finally:
         shutil.rmtree(tmp_dir)
 
@@ -126,24 +126,17 @@ def test_repair_partial_metadata():
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_in, fps=30)
 
-        # Mock TimelapseVideo to return partial metadata
-        with patch("mini_timelapse.repair.TimelapseVideo") as mock_class:
-            mock_video = MagicMock(spec=TimelapseVideo)
-            mock_video.__enter__.return_value = mock_video
-            mock_video.path = video_in
-            mock_video.length = num_frames
-            mock_video.__len__.return_value = num_frames
-            mock_video.metadata_sources = {"attachment"}
-            mock_video._fps = 30.0
-            mock_video.width = 320
-            mock_video.height = 240
+        # Partial metadata: frame 3 has no 'time'
+        meta = {i: {"index": i, "time": f"2023:01:01 12:{i:02d}:00"} for i in range(num_frames)}
+        del meta[3]["time"]
 
-            # Partial metadata: frame 3 has no 'time'
-            meta = {i: {"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)}
-            del meta[3]["time"]
-            mock_video.metadata = meta
-            mock_class.return_value = mock_video
-
+        # 1. Patch ONLY the specific metadata methods on the class.
+        # Note: Because we are patching an instance method at the class level,
+        # the lambda needs to accept 'self' as the first argument.
+        with (
+            patch("mini_timelapse.repair.TimelapseVideo._extract_sovereign_metadata", return_value=meta.copy()),
+            patch("mini_timelapse.repair.TimelapseVideo._get_metadata", side_effect=lambda i, *args, **kwargs: meta.get(i, {})),
+        ):
             # Fail without skip_corrupted
             with patch("sys.exit", side_effect=SystemExit) as mock_exit:
                 with pytest.raises(SystemExit):
@@ -151,11 +144,11 @@ def test_repair_partial_metadata():
                 mock_exit.assert_any_call(1)
 
             # Success with skip_corrupted
-            with patch("mini_timelapse.repair.compile_video") as mock_compile:
-                repair_video(video_in, video_out, skip_corrupted=True)
-                mock_compile.assert_called_once()
-                source = mock_compile.call_args.kwargs["source"]
-                assert len(source) == 4  # One frame skipped
+            repair_video(video_in, video_out, skip_corrupted=True)
+
+            # Test that the repaired video has 4 frames.
+            with TimelapseVideo(video_out) as tv:
+                assert len(tv) == 4
 
     finally:
         shutil.rmtree(tmp_dir)
@@ -175,33 +168,27 @@ def test_repair_corrupted_frames():
         with LocalImageSource(src_spec) as source:
             compile_video(source, video_in, fps=30)
 
-        # Mock TimelapseVideo to throw on specific frame
-        with patch("mini_timelapse.repair.TimelapseVideo") as mock_class:
-            mock_video = MagicMock(spec=TimelapseVideo)
-            mock_video.__enter__.return_value = mock_video
-            mock_video.path = video_in
-            mock_video.length = num_frames
-            mock_video.__len__.return_value = num_frames
-            mock_video.metadata = {i: {"index": i, "time": f"2023:01:01 12:00:{i:02d}"} for i in range(num_frames)}
-            mock_video.metadata_sources = {"attachment", "subtitle"}
+        # 1. Keep a reference to the REAL method
+        original_get_frame = TimelapseVideo.get_frame
 
-            # Frame 4 is "corrupted" (decode error)
-            def get_frame_mock(idx):
-                if idx == 4:
-                    raise RuntimeError("Decode error")
-                return (MagicMock(), mock_video.metadata[idx])
+        # 2. Create a wrapper that raises an error ONLY on frame 4,
+        # but calls the real method for all other frames
+        def mock_get_frame(self, idx, *args, **kwargs):
+            if idx == 4:
+                print(f"Throwing error on frame {idx}")
+                raise RuntimeError("Decode error")
+            retval = original_get_frame(self, idx, *args, **kwargs)
+            print(f"Got frame {idx}: {retval}")
+            return retval
 
-            mock_video.get_frame.side_effect = get_frame_mock
-            mock_class.return_value = mock_video
-
+        # 3. Patch the method using autospec to ensure the signature matches
+        with patch("mini_timelapse.repair.TimelapseVideo.get_frame", autospec=True, side_effect=mock_get_frame):
             # Run repair with skip_corrupted=True
-            with patch("mini_timelapse.repair.compile_video") as mock_compile:
-                repair_video(video_in, video_out, skip_corrupted=True)
-                mock_compile.assert_called_once()
-                source = mock_compile.call_args.kwargs["source"]
-                # Iterate the source to trigger the skips
-                frames = list(source)
-                assert len(frames) == 4
+            repair_video(video_in, video_out, skip_corrupted=True)
+
+            # Test that the repaired video has 4 frames.
+            with TimelapseVideo(video_out) as tv:
+                assert len(tv) == 4
 
     finally:
         shutil.rmtree(tmp_dir)
@@ -239,7 +226,7 @@ def test_repair_real_truncation():
             # Should have recovered some but not all frames
             # At 60% size, we should have lost some of the end
             assert 0 < len(tv) < num_frames
-            assert "time" in tv.metadata[0]
+            assert "time" in tv._get_metadata(0)
 
     finally:
         shutil.rmtree(tmp_dir)
@@ -273,7 +260,7 @@ def test_repair_real_corruption():
         with TimelapseVideo(video_repaired) as tv:
             # Should have most frames, skipping only the corrupted segment
             assert 0 < len(tv) <= num_frames
-            assert "time" in tv.metadata[0]
+            assert "time" in tv._get_metadata(0)
 
     finally:
         shutil.rmtree(tmp_dir)

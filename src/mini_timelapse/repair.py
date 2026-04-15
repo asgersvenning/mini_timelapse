@@ -13,13 +13,13 @@ logger = logging.getLogger("timelapse-repair")
 
 def repair_video(
     input_path: str,
-    output_path: str,
+    output_path: str | None = None,
     fps: float | None = None,
     quality: int = 23,
     preset: str = "medium",
     skip_corrupted: bool = False,
     infer_metadata: bool = False,
-    force: bool = False,
+    force: bool = True,
 ) -> None:
     """
     Repair a damaged timelapse video by re-encoding frames in correct temporal order.
@@ -39,25 +39,40 @@ def repair_video(
     metadata_sources = set()
 
     logger.info(f"Opening video for repair: {input_path}")
-    with TimelapseVideo(input_path, fps=fps, container_kwargs={"metadata_errors": "ignore"}) as video:
+    with TimelapseVideo(input_path, fps=fps, lazy=True, container_kwargs={"metadata_errors": "ignore"}) as video:
         num_frames = len(video)
+        logger.debug(f"Video has {num_frames} frames")
 
         # --- Metadata Integrity Check ---
-        valid_indices = [i for i, m in video.metadata.items() if "time" in m]
-        if len(valid_indices) == num_frames:
+        print(video._extract_sovereign_metadata())
+        attachment_indices = [i for i, m in video._extract_sovereign_metadata().items() if "time" in m]
+        if attachment_indices:
+            logger.debug("Validated metadata from attachment")
             metadata_sources.add("attachment")
+        else:
+            logger.debug("Could not validate metadata from attachment")
 
         # Check if we can extract metadata from subtitles
         subtitle_indices = []
+        logger.debug("Attempting to load metadata from subtitles")
         for i in range(num_frames):
+            if i % 1000 == 0:
+                logger.debug(f"Processing frame {i}/{num_frames}")
             submeta = video._get_metadata(i, force_subtitle=True)
             if submeta and "time" in submeta:
                 subtitle_indices.append(i)
 
-        if subtitle_indices and len(subtitle_indices) == num_frames:
-            metadata_sources.add("subtitle")
+        logger.debug(f"Found {len(subtitle_indices)} frames with metadata from subtitles")
 
-        if not valid_indices:
+        if subtitle_indices:
+            logger.debug("Validated metadata from subtitles")
+            metadata_sources.add("subtitle")
+        else:
+            logger.debug("Could not validate metadata from subtitles")
+
+        valid_indices = list(set(attachment_indices) | set(subtitle_indices))
+
+        if not metadata_sources:
             if not infer_metadata:
                 logger.error("No timelapse metadata found in video!")
                 logger.info("If this is a standard video, try using '--infer-metadata' to deduce timestamps.")
@@ -90,10 +105,18 @@ def repair_video(
         elif len(metadata_sources) < 2:
             source = list(metadata_sources)[0]
             logger.warning(f"Only one metadata source found ({source}). Redundancy layer is missing.")
+        else:
+            logger.debug(f"Metadata sources: {metadata_sources}")
 
         # --- Sorting ---
         # Sort valid indices by time
-        sorted_indices = sorted(valid_indices, key=lambda i: parse_time(video.metadata[i]["time"]))
+        attachment_metadata = video._extract_sovereign_metadata()
+        valid_indices_with_time = [
+            (i, tstr)
+            for i in valid_indices
+            if (tstr := video._get_metadata(i).get("time", attachment_metadata.get(i, {}).get("time", None)))
+        ]
+        sorted_indices = [i for i, tstr in sorted(valid_indices_with_time, key=lambda x: parse_time(x[1]))]
 
         if sorted_indices != list(range(num_frames)):
             logger.warning("Frames are out of order. Repair tool will re-order them.")
@@ -121,6 +144,9 @@ def repair_video(
         # --- Compilation ---
         source = VideoImageSource(video, indices=sorted_indices, skip_corrupted=skip_corrupted)
 
+        if output_path is None:
+            name, ext = os.path.splitext(input_path)
+            output_path = f"{name}_repaired{ext}"
         logger.info(f"Starting repair compilation: {len(source)} frames -> {output_path}")
 
         compile_video(source=source, output=output_path, fps=fps or 30, quality=quality, preset=preset)
@@ -132,7 +158,7 @@ def cli():
         prog="timelapse-repair", description="Repair out-of-order or damaged timelapse videos by re-encoding them based on metadata."
     )
     parser.add_argument("-i", "--input", required=True, help="Path to damaged timelapse video.")
-    parser.add_argument("-o", "--output", help="Path for the repaired output video.")
+    parser.add_argument("-o", "--output", help="Path for the repaired output video. Defaults to input path with '_repaired' appended.")
     parser.add_argument("--fps", type=int, default=30, help="Playback framerate.")
     parser.add_argument("-q", "--quality", type=int, default=23, help="H.264 quality (CRF).")
     parser.add_argument("--preset", default="medium", help="x264 speed preset.")

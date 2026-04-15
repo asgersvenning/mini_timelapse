@@ -1,37 +1,50 @@
-name: Cleanup PR Profile
+name: Cleanup PR Profiles
 
 on:
   pull_request:
-    # This triggers when a PR is either merged or closed without merging
-    types: [closed]
+    types: [closed] # Triggers when a PR is merged OR closed without merging
 
 jobs:
   cleanup:
+    name: Delete PR Profiling Data
     runs-on: ubuntu-latest
-    # Need write permissions to modify the gh-pages branch
     permissions:
-      contents: write
-      
+      contents: write # Required to push the deletion commit to gh-pages
+
     steps:
-      - name: Checkout GitHub Pages branch
+      # 1. Check out the isolated gh-pages branch directly
+      - name: Checkout gh-pages branch
         uses: actions/checkout@v4
         with:
-          ref: gh-pages # This is the default branch used by the deployment action
+          ref: gh-pages
+          fetch-depth: 1 # We only need the latest commit
 
-      - name: Remove PR Profile Directory
+      # 2. Define the exact folder name to nuke
+      - name: Determine PR Directory
+        id: vars
+        run: echo "dir=pr-${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+
+      # 3. Perform the deletion and push
+      - name: Remove PR Directory
         run: |
-          # Set up the standard GitHub Actions bot git user
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          DIR_NAME="pr-${{ github.event.pull_request.number }}"
-          
-          # Check if the directory exists before trying to delete it
-          if [ -d "$DIR_NAME" ]; then
-            git rm -rf "$DIR_NAME"
-            git commit -m "chore: cleanup profiling data for closed PR #${{ github.event.pull_request.number }}"
-            git push
-            echo "✅ Successfully deleted $DIR_NAME"
+          # Check if the directory actually exists before trying to delete it
+          # (Just in case the profiling action failed or never ran on this PR)
+          if [ -d "${{ steps.vars.outputs.dir }}" ]; then
+            
+            # Configure git identity for the bot
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # Remove the directory from git tracking
+            git rm -r "${{ steps.vars.outputs.dir }}"
+            
+            # Commit the deletion
+            git commit -m "chore: cleanup profiling data for merged/closed PR #${{ github.event.pull_request.number }}"
+            
+            # Push changes back to the gh-pages branch
+            git push origin gh-pages
+            
+            echo "✅ Successfully deleted ${{ steps.vars.outputs.dir }}"
           else
-            echo "ℹ️ Directory $DIR_NAME does not exist. Nothing to clean up."
+            echo "⚠️ Directory ${{ steps.vars.outputs.dir }} not found. Nothing to clean up."
           fi
