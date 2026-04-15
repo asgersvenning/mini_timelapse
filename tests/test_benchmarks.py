@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 
 import pytest
-from pyinstrument import Profiler
 
 from mini_timelapse.compile import LocalImageSource, compile_video
 from mini_timelapse.decompile import decompile_video
@@ -115,6 +114,12 @@ def test_benchmark_random_access(benchmark, benchmark_data):
 # PROFILING EXECUTION BLOCK
 # =====================================================================
 if __name__ == "__main__":
+    try:
+        from pyinstrument import Profiler
+    except ImportError:
+        print("Please install pyinstrument: uv run pip install pyinstrument")
+        sys.exit(1)
+
     print("Setting up profiling data...")
     tmp_dir = tempfile.mkdtemp()
     img_dir = os.path.join(tmp_dir, "images")
