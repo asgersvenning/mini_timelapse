@@ -103,7 +103,7 @@ class TimelapseVideo:
                         attachment_data = json.load(f)
 
                     if isinstance(attachment_data, list):
-                        logger.info(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
+                        logger.debug(f"Loaded {len(attachment_data)} metadata entries from Matroska attachment.")
                         for item in attachment_data:
                             if "index" in item and 0 <= int(item["index"]) < self.length:
                                 metadata[int(item["index"])] = item

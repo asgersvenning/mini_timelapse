@@ -104,7 +104,6 @@ def compile_video(
             m_packet_lifeline = []
 
             for i, (rgb_array, meta) in enumerate(tqdm(source, desc="Compiling", unit="frame")):
-                logger.info(f"{i=} {rgb_array.shape=} {meta=}")
                 mpts = int(round(i * 1000 / fps))
                 next_mpts = int(round((i + 1) * 1000 / fps))
                 mdur = max(1, next_mpts - mpts)
