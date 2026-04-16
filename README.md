@@ -8,22 +8,38 @@
 
 ---
 
-**mini-timelapse** is a Python toolkit for compiling timestamped, geolocated images into compact `.mkv` video containers, and extracting them back out with metadata intact. 
+**mini-timelapse** is a Python toolkit for compiling timestamped, geolocated images into compact `.mkv` video containers, and extracting them back out with metadata intact.
 
 It maps each source image to exactly one video frame (1:1), embeds the original EXIF timestamps and GPS coordinates as a strictly interleaved data stream, and provides a Python API for temporal and random-access frame retrieval.
 
-When reconstructing the frames, the original EXIF data is attempted to be restored, however this is done under the assumption that only the timestamp and GPS coordinates can change between frames, while the remaining EXIF tags are assumed to be constant. If this is not the case, the reconstructed frames will not have the correct EXIF data.
+When reconstructing the frames, the original EXIF data is attempted to be restored under the assumption that only the timestamp and GPS coordinates change between frames (other EXIF tags remain constant).
 
-To view the video with the embedded metadata I recommend [MPC-HC](https://github.com/clsid2/mpc-hc), the timestamps are embedded as a subtitle track and can be toggled on and off with the `s` key. 
+> [!TIP]
+> To view the video with the embedded metadata, I recommend [MPC-HC](https://github.com/clsid2/mpc-hc). The timestamps are embedded as a subtitle track and can be toggled on and off with the `s` key.
 
-### Data Recovery Philosophy
+## Table of Contents
 
-The primary and recommended way to read or extract the compiled data is to use the `mini-timelapse` Python module (see the [Python API](#python-api) section) or the `timelapse-decompile` CLI. The module automatically parses the dual-layer metadata and handles the complex task of patching the original EXIF bytes.
+- [Features](#features)
+- [Data Recovery Philosophy](#data-recovery-philosophy)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Python API](#python-api)
+- [CLI Reference](#cli-reference)
+- [Architecture Details](#architecture-details)
 
-However, to ensure your data is never locked behind a proprietary tool, the metadata is stored using standard Matroska structures. **You do not strictly need this Python package to recover your data.** For quick debugging, bash scripting, or integration into environments where installing new dependencies is difficult, you can extract the raw data manually using standard `ffmpeg`:
+## Features
 
-1. **Native MKV Attachments (Sovereign Data)**: A pristine `metadata.json` and the original `master.exif` binary template are securely attached directly to the container.
-2. **Visible Subtitle Track**: A strictly interleaved subtitle stream acts as a visual HUD and a secondary data fallback.
+- **Compile**: Converts a directory of JPEGs/PNGs into a single `.mkv` file with interleaved metadata.
+
+- **Decompile**: Extracts `.mkv` frames back to JPEGs, restoring EXIF timestamps and GPS data.
+- **Lossless Color**: Encodes using the `yuv444p` color space to preserve 100% of the original RGB chroma data.
+- **Temporal Search**: Query frames by their actual real-world capture time.
+- **Remote IO**: Supports direct compilation from and decompilation to SFTP/ERDA storage via [pyremotedata](https://github.com/asgersvenning/pyremotedata).
+- **Repair**: Fixes damaged, truncated, or out-of-order timelapse videos by re-encoding them based on capture-time metadata.
+
+## Data Recovery Philosophy
+
+The recommended way to read or extract the compiled data is to use the `mini-timelapse` Python module or the `timelapse-decompile` CLI. However, to ensure your data is never locked behind a proprietary tool, the metadata is stored using standard Matroska structures. **You do not strictly need this Python package to recover your data.** Using standard `ffmpeg`, you can extract the raw data manually:
 
 ```bash
 # 1. Extract the sovereign JSON metadata array
@@ -36,204 +52,169 @@ ffmpeg -dump_attachment:t:1 master.exif -i timelapse.mkv -y
 ffmpeg -i timelapse.mkv -map 0:s:0 -f srt extracted_subtitles.srt
 ```
 
-## Features
-
-* **Compile**: Converts a directory of JPEGs/PNGs into a single `.mkv` file with interleaved metadata.
-* **Decompile**: Extracts `.mkv` frames back to JPEGs, restoring EXIF timestamps and GPS data.
-* **Lossless Color**: Encodes using the `yuv444p` color space to preserve 100% of the original RGB chroma data.
-* **Temporal Search**: Query frames by their actual real-world capture time.
-* **Remote IO**: Supports direct compilation from and decompilation to SFTP/ERDA storage via [pyremotedata](https://github.com/asgersvenning/pyremotedata).
-* **Repair**: Fixes damaged, truncated, or out-of-order timelapse videos by re-encoding them based on capture-time metadata.
-
 ## Installation
 
-### 1. Prerequisites
+### Prerequisites
 
-*   **Python 3.12+**
-*   **FFmpeg**: Required for embedding and extracting Matroska attachments and metadata.
+- **Python 3.12+**
+- **FFmpeg**: Required for embedding and extracting Matroska attachments and metadata. (`sudo apt install ffmpeg` / `brew install ffmpeg` / `winget install ffmpeg`)
+- **[uv](https://docs.astral.sh/uv/)**: Recommended for installation and dependency management.
 
-| Platform | Command |
-| :--- | :--- |
-| **Ubuntu/Debian** | `sudo apt update && sudo apt install -y ffmpeg` |
-| **macOS** | `brew install ffmpeg` |
-| **Windows** | `winget install ffmpeg` |
+### Option A: End-User (CLI Only)
 
-### 2. Setup
+If you just want to use the command-line tools without cluttering your system environments, use `uv tool`. This installs the CLI commands globally in an isolated environment.
 
-#### Option A: Using [uv](https://docs.astral.sh/uv/) (Recommended)
-
-One command to set up the environment and install all dependencies in **editable mode**:
 ```bash
+# Install directly from GitHub
+uv tool install git+[https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+
+# You can now run the commands from anywhere:
+timelapse-compile --help
+```
+
+### Option B: As a Python Dependency
+
+If you are building a Python script and want to use the `mini_timelapse` module in your own project:
+
+```bash
+uv add git+[https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+```
+
+### Option C: Local Development (Contributors)
+
+If you want to modify the source code, use `uv sync` to set up a robust, locked development environment.
+
+```bash
+git clone [https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+cd mini_timelapse
 uv sync --all-extras
 
-# Run commands directly (no activation required)
+# Run local CLI changes via the virtual environment
 uv run timelapse-compile --help
 ```
-
-#### Option B: Using standard `pip`
-
-```bash
-# 1. Create and activate environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# 2. Install package in editable mode
-pip install -e ".[remote]"
-```
-
----
-
-
 
 ## Quick Start
 
 ### 1. Compile images to video
+
+Frames are *(attempted to be)* sorted chronologically and encoded 1:1 into the container.
+
 ```bash
-[uv run] timelapse-compile -i ./my_photos/ -o timelapse.mkv
+timelapse-compile -i ./my_photos/ -o timelapse.mkv
 ```
-Frames are sorted chronologically (using natural sort for filenames) and encoded 1:1 into the container. 
+
+*(Note: If developing locally, prefix these with `uv run`)*
 
 ### 2. Decompile video back to images
-```bash
-[uv run] timelapse-decompile -i timelapse.mkv -o ./extracted/
-```
+
 Each frame is extracted as a JPEG with its original EXIF tags restored.
 
-### 3. Remote Storage
-If `pyremotedata` is installed, you can interface directly with SFTP sources:
 ```bash
-export PYREMOTEDATA_REMOTE_USERNAME="myuser"
-export PYREMOTEDATA_REMOTE_HOSTNAME="io.erda.dk"
-
-# Compile from remote
-[uv run] timelapse-compile -i /remote/path/to/images/ -o timelapse.mkv --remote
-
-# Decompile to remote
-[uv run] timelapse-decompile -i timelapse.mkv -o /remote/output/folder/ --remote
+timelapse-decompile -i timelapse.mkv -o ./extracted/
 ```
 
-### 4. Repair Damaged Videos
-If a video was muxed out of order, or some frames are corrupted/missing:
+### 3. Remote Storage
+
+If installed with remote capabilities, you can interface directly with SFTP sources:
+
 ```bash
-# Fix out-of-order frames (sorted by capture time)
-[uv run] timelapse-repair -i damaged.mkv -o repaired.mkv
+# Compile from remote
+timelapse-compile -i /remote/path/to/images/ -o timelapse.mkv --remote
+```
 
-# Recover frames from a truncated or corrupted file
-[uv run] timelapse-repair -i truncated.mkv -o recovered.mkv --skip-corrupted
+> [!NOTE]
+> Using `--remote` requires installing with the optional dependencies "remote", which can be done via:
+> ```bash
+> uv sync --extra remote
+> ```
 
-# Create a timelapse from a standard video by inferring timestamps
-[uv run] timelapse-repair -i standard.mp4 -o timelapse.mkv --infer-metadata
+### 4. Repair Damaged Videos
+
+If a video was muxed out of order, or some frames are corrupted/missing:
+
+```bash
+# Fix out-of-order frames
+timelapse-repair -i damaged.mkv -o repaired.mkv
+
+# Recover frames from a truncated file
+timelapse-repair -i truncated.mkv -o recovered.mkv --skip-corrupted
 ```
 
 ## Python API
 
 ### Reading and Querying Data
+
 ```python
 from mini_timelapse.reader import TimelapseVideo
 
 with TimelapseVideo("timelapse.mkv") as video:
     print(f"Loaded {len(video)} frames")
 
-    # Temporal Search: Get frame closest to a real-world datetime (O(log N))
+    # Temporal Search: Get frame closest to a real-world datetime
     frame, meta, diff = video.get_frame_by_time("2024-06-15 12:00:00", max_diff=3600)
     print(f"Closest match is {diff:.1f}s away. Capture time: {meta.get('time')}")
 
     # Random access by index
     frame, meta = video[42]
-    print(meta.get("lat"), meta.get("lon"))  # 55.6761, 12.5683
-    print(frame.shape)                       # (height, width, 3)
-
-    # Sequential iteration
-    for frame, meta in video:
-        process(frame, meta)
+    print(meta.get("lat"), meta.get("lon"))
 
     # Slicing
     first_ten = video[0:10]
 ```
 
-### Compilation
+### Compilation & Decompilation
+
 ```python
 from mini_timelapse.compile import compile_video, LocalImageSource
-
-src_spec = LocalImageSource.SourceSpec(
-    src="./my_photos/",
-    recursive=True,
-    n_max=100
-)
-with LocalImageSource(spec=src_spec) as source:
-    compile_video(
-        source=source,
-        output="timelapse.mkv",
-        fps=30,
-        quality=23,
-        preset="medium",
-        dry_run=False,
-    )
-```
-
-### Decompilation
-```python
 from mini_timelapse.decompile import decompile_video
 
-decompile_video(
-    video_path="timelapse.mkv",
-    output_dir="./extracted/",
-    prefix="frame",
-    quality=95,
-)
+# Compilation
+src_spec = LocalImageSource.SourceSpec(src="./my_photos/", recursive=True, n_max=100)
+with LocalImageSource(spec=src_spec) as source:
+    compile_video(source=source, output="timelapse.mkv", fps=30)
+
+# Decompilation
+decompile_video(video_path="timelapse.mkv", output_dir="./extracted/")
 ```
 
 ## CLI Reference
 
 ### `timelapse-compile`
 
-| Flag | Description | Default |
-|---|---|---|
-| `-i`, `--input` | Path to image directory, file, or glob pattern | *required* |
-| `-o`, `--output` | Output video path (`.mkv` strictly recommended) | derived from `input` |
-| `--fps` | Playback framerate | `30` |
-| `-q`, `--quality` | H.264 CRF quality (0–51, lower is better) | `23` |
-| `--preset` | x264 speed preset (`ultrafast` … `veryslow`) | `medium` |
-| `-r`, `--recursive` | Recursively search for images in the input directory | |
-| `-n`, `--n-max` | Maximum number of images to compile | |
-| `-d`, `--dry-run` | Log actions without encoding | |
-| `-v`, `--verbose` | Enable debug logging | |
-| `--remote` | Use pyremotedata backend for SFTP access | |
-| `--sharelink-id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
-| `--preext-pattern` | Optional regex pattern matched to the file path, excluding the file extension | `None` |
-
+| Flag              | Description                                     | Default    |
+| :---------------- | :---------------------------------------------- | :--------- |
+| `-i`, `--input`   | Path to image directory, file, or glob pattern  | *required* |
+| `-o`, `--output`  | Output video path (`.mkv` strictly recommended) | derived    |
+| `--fps`           | Playback framerate                              | `30`       |
+| `-q`, `--quality` | H.264 CRF quality (0–51, lower is better)       | `23`       |
+| `--preset`        | x264 speed preset                               | `medium`   |
+| `--remote`        | Use [`pyremotedata`](https://github.com/asgersvenning/pyremotedata) backend for SFTP access | |
 
 ### `timelapse-decompile`
 
-| Flag | Description | Default |
-|---|---|---|
-| `-i`, `--input` | Path to compiled timelapse video | *required* |
-| `-o`, `--output` | Output directory for extracted images | derived from `input` |
-| `--prefix` | Filename prefix (e.g., `frame` → `frame_000000.jpg`) | `frame` |
-| `-q`, `--quality` | JPEG save quality (1–100) | `95` |
-| `-v`, `--verbose` | Enable debug logging | |
-| `--remote` | Upload extracted images to SFTP destination | |
-| `--sharelink-id` | Sharelink ID for ERDA | `None` (if provided `pyremotedata` will attempt a anonymous login with the given sharelink id as both username and password) |
+| Flag             | Description                           | Default    |
+| :--------------- | :------------------------------------ | :--------- |
+| `-i`, `--input`  | Path to compiled timelapse video      | *required* |
+| `-o`, `--output` | Output directory for extracted images | derived    |
+| `--prefix`       | Filename prefix                       | `frame`    |
 
 ### `timelapse-repair`
 
-| Flag | Description | Default |
-|---|---|---|
-| `-i`, `--input` | Path to damaged timelapse video | *required* |
-| `-o`, `--output` | Path for the repaired output video | derived from `input` |
-| `--fps` | Playback framerate | `30` |
-| `-q`, `--quality` | H.264 quality (CRF, 0–51) | `23` |
-| `--preset` | x264 speed preset | `medium` |
-| `--skip-corrupted` | Skip frames that cannot be decoded or have missing metadata | |
-| `--infer-metadata` | Deduce timestamps from video creation time if missing | |
-| `-f`, `--force` | Skip interactive confirmation | |
-| `-v`, `--verbose` | Enable debug logging | |
+| Flag               | Description                                           | Default    |
+| :----------------- | :---------------------------------------------------- | :--------- |
+| `-i`, `--input`    | Path to damaged timelapse video                       | *required* |
+| `-o`, `--output`   | Path for the repaired output video                    | derived    |
+| `--skip-corrupted` | Skip frames that cannot be decoded                    |            |
+| `--infer-metadata` | Deduce timestamps from video creation time if missing |            |
+
+> [!TIP]
+> Run any CLI command with `--help` for the full list of arguments.
 
 ## Architecture Details
 
 1. **Format:** Uses the Matroska (`.mkv`) container paired with H.264 video.
 2. **Color Space:** Enforces `yuv444p` and `bt709` tagging. Unlike standard video profiles (`yuv420p`), this prevents chroma subsampling, ensuring exact RGB data reconstruction.
-3. **Data Interleaving:** Extracted EXIF data is serialized as JSON and strictly interleaved into a standard SubRip (`srt`) subtitle stream. This aligns metadata packets immediately adjacent to their corresponding video packets, preventing decoder buffer overflows during random access.
+3. **Data Interleaving:** Extracted EXIF data is serialized as JSON and strictly interleaved into a standard SubRip (`srt`) subtitle stream. This aligns metadata packets adjacent to their corresponding video packets, preventing decoder buffer overflows during random access.
 4. **Time Alignment:** The MKV timeline is synthetic (Constant Frame Rate) to ensure broad media player compatibility. True temporal context is preserved in the interleaved JSON payload, allowing the reader to map variable real-world time gaps onto the sequential video track via binary search.
 
 ## License
