@@ -66,7 +66,7 @@ If you just want to use the command-line tools without cluttering your system en
 
 ```bash
 # Install directly from GitHub
-uv tool install git+[https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+uv tool install git+https://github.com/asgersvenning/mini_timelapse.git
 
 # You can now run the commands from anywhere:
 timelapse-compile --help
@@ -77,7 +77,7 @@ timelapse-compile --help
 If you are building a Python script and want to use the `mini_timelapse` module in your own project:
 
 ```bash
-uv add git+[https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+uv add git+https://github.com/asgersvenning/mini_timelapse.git
 ```
 
 ### Option C: Local Development (Contributors)
@@ -85,7 +85,7 @@ uv add git+[https://github.com/asgersvenning/mini_timelapse.git](https://github.
 If you want to modify the source code, use `uv sync` to set up a robust, locked development environment.
 
 ```bash
-git clone [https://github.com/asgersvenning/mini_timelapse.git](https://github.com/asgersvenning/mini_timelapse.git)
+git clone git@github.com:asgersvenning/mini_timelapse.git
 cd mini_timelapse
 uv sync --all-extras
 
